@@ -1,0 +1,75 @@
+{
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@auth/*": [
+        "./src/@auth/*"
+      ],
+      "@i18n": [
+        "./src/@i18n/index"
+      ],
+      "@i18n/*": [
+        "./src/@i18n/*"
+      ],
+      "@fuse/*": [
+        "./src/@fuse/*"
+      ],
+      "@history/*": [
+        "./src/@history/*"
+      ],
+      "@mock-utils/*": [
+        "./src/@mock-utils/*"
+      ],
+      "@schema": [
+        "./src/@schema"
+      ],
+      "@/*": [
+        "./src/*"
+      ]
+    },
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "jsx": "preserve",
+    "lib": [
+      "dom",
+      "dom.iterable",
+      "es2020",
+      "scripthost"
+    ],
+    "allowJs": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "incremental": true,
+    "noEmit": true,
+    "strict": false,
+    "forceConsistentCasingInFileNames": true,
+    "noFallthroughCasesInSwitch": true,
+    "skipLibCheck": true,
+    "skipDefaultLibCheck": true,
+    "plugins": [
+      {
+        "name": "typescript-plugin-css-modules"
+      },
+      {
+        "name": "next"
+      }
+    ]
+  },
+  "exclude": [
+    "node_modules",
+    ".next"
+  ],
+  "include": [
+    "./src/**/*.ts",
+    "./src/**/*.tsx",
+    "./src/global.d.ts",
+    "next-env.d.ts",
+    "next.config.mjs",
+    "next.config.ts",
+    "tailwind.config.ts",
+    ".next/types/**/*.ts"
+  ]
+}
