@@ -1,7 +1,10 @@
+// src/components/admin/users/ResetPasswordDialog.tsx
 "use client";
 
 import { api, fetchJSON } from "@/lib/api";
 import type { UserRow } from "@/types/user";
+import Visibility from "@mui/icons-material/Visibility";
+import VisibilityOff from "@mui/icons-material/VisibilityOff";
 import {
   Alert,
   Button,
@@ -9,14 +12,17 @@ import {
   DialogActions,
   DialogContent,
   DialogTitle,
+  IconButton,
+  InputAdornment,
   MenuItem,
   Stack,
   TextField,
 } from "@mui/material";
 import * as React from "react";
 
+/** ยิงเข้า Nest: /api/users/:id/reset-password */
 const RESET_PASSWORD_API = (id: string) =>
-  api(`/api/admin/users/${id}/reset-password`);
+  api(`/api/users/${id}/reset-password`);
 
 function toHeaderObject(
   h: HeadersInit | undefined | null
@@ -32,7 +38,7 @@ type Props = {
   open: boolean;
   onClose: () => void;
   user?: UserRow | null;
-  onDone: (msg?: string) => void;
+  onDone: (msg?: string) => void; // callback ยิง snackbar/แจ้งเตือน
   authHeaders: HeadersInit | Record<string, string>;
 };
 
@@ -45,6 +51,7 @@ export default function ResetPasswordDialog({
 }: Props) {
   const [mode, setMode] = React.useState<"auto" | "manual">("auto");
   const [password, setPassword] = React.useState("");
+  const [showPw, setShowPw] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
 
   const authHeadersObj = React.useMemo(
@@ -56,13 +63,18 @@ export default function ResetPasswordDialog({
     if (open) {
       setMode("auto");
       setPassword("");
+      setShowPw(false);
     }
   }, [open]);
+
+  const MIN_LEN = 8;
+  const manualInvalid = mode === "manual" && password.trim().length < MIN_LEN;
 
   const handleReset = async () => {
     if (!user?._id) return;
     try {
       setSaving(true);
+
       const body: any = { mode };
       if (mode === "manual") body.password = password;
 
@@ -77,18 +89,16 @@ export default function ResetPasswordDialog({
 
       onDone(
         mode === "auto"
-          ? `รหัสผ่านชั่วคราว: ${res?.tempPassword || "(ตรวจจากระบบผู้ดูแล)"}`
+          ? `รหัสผ่านชั่วคราว: ${res?.tempPassword || "(ดูได้ในระบบผู้ดูแล)"}`
           : "ตั้งรหัสผ่านใหม่สำเร็จ"
       );
       onClose();
     } catch (e: any) {
-      alert(e?.message || "ตั้งรหัสผ่านไม่สำเร็จ");
+      onDone(e?.message || "ตั้งรหัสผ่านไม่สำเร็จ");
     } finally {
       setSaving(false);
     }
   };
-
-  const manualInvalid = mode === "manual" && password.trim().length < 6;
 
   return (
     <Dialog
@@ -117,11 +127,28 @@ export default function ResetPasswordDialog({
           {mode === "manual" && (
             <TextField
               label="รหัสผ่านใหม่"
-              type="password"
+              type={showPw ? "text" : "password"}
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              helperText="อย่างน้อย 6 ตัวอักษร"
               error={manualInvalid}
+              helperText={
+                manualInvalid
+                  ? `รหัสผ่านต้องมีอย่างน้อย ${MIN_LEN} ตัวอักษร`
+                  : `อย่างน้อย ${MIN_LEN} ตัวอักษร`
+              }
+              InputProps={{
+                endAdornment: (
+                  <InputAdornment position="end">
+                    <IconButton
+                      aria-label="toggle password visibility"
+                      onClick={() => setShowPw((v) => !v)}
+                      edge="end"
+                    >
+                      {showPw ? <VisibilityOff /> : <Visibility />}
+                    </IconButton>
+                  </InputAdornment>
+                ),
+              }}
             />
           )}
 

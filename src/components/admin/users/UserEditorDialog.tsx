@@ -30,16 +30,22 @@ const DEPARTMENT_OPTIONS = [
   "IT",
   "HR",
   "Finance",
-  "Operation",
-  "Sales",
-  "Engineering",
+  "Production",
+  "Purchasing",
+  "Maintenance",
+  "Raw Material Receiving",
+  "Quality Assurance",
 ];
 const POSITION_OPTIONS = [
-  "Staff",
-  "Senior Staff",
+  "Staff 1",
+  "Staff 2",
+  "Senior Staff 1",
+  "Senior Staff 2",
   "Supervisor",
+  "Senior Supervisor",
+  "Assistant Manager",
   "Manager",
-  "Head",
+  "General Manager",
   "Director",
 ];
 
