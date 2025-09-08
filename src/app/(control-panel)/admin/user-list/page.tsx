@@ -29,6 +29,7 @@ import * as React from "react";
 
 const USERS_API = api("/api/admin/users");
 const USER_API_ID = (id: string) => api(`/api/admin/users/${id}`);
+const hasUser = (u: UserRow | null): u is UserRow => !!u;
 
 const Carded = styled(Paper)(({ theme }) => ({
   borderRadius: 16,
@@ -37,28 +38,21 @@ const Carded = styled(Paper)(({ theme }) => ({
   background: theme.palette.background.paper,
 }));
 
-/** แปลง HeadersInit → Record<string, string> */
+/** HeadersInit → Record<string,string> */
 function toHeaderObject(
   h: HeadersInit | undefined | null
 ): Record<string, string> {
   if (!h) return {};
-  // ถ้าเป็น Headers instance
   if (typeof Headers !== "undefined" && h instanceof Headers) {
     return Object.fromEntries(h.entries());
   }
-  // ถ้าเป็น tuple array
-  if (Array.isArray(h)) {
-    return Object.fromEntries(h);
-  }
-  // ถ้าเป็น plain object อยู่แล้ว
+  if (Array.isArray(h)) return Object.fromEntries(h);
   return h as Record<string, string>;
 }
 
 export default function AdminUsersPage() {
   const { data: session } = useSession();
   const authHeaders = useAuthHeaders();
-
-  // ✅ ใช้เป็น object ที่ type ตรงกับ props และ fetch init
   const authHeadersObj = React.useMemo<Record<string, string>>(
     () => toHeaderObject(authHeaders),
     [authHeaders]
@@ -121,8 +115,7 @@ export default function AdminUsersPage() {
 
   const confirmDelete = async (u: UserRow) => {
     if (!canDelete) return;
-    const ok = window.confirm(`ต้องการลบผู้ใช้ "${u.username}" ใช่หรือไม่?`);
-    if (!ok) return;
+    if (!window.confirm(`ต้องการลบผู้ใช้ "${u.username}" ใช่หรือไม่?`)) return;
     try {
       await fetchJSON(USER_API_ID(u._id), {
         method: "DELETE",
@@ -222,18 +215,23 @@ export default function AdminUsersPage() {
           <Typography variant="h6" fontWeight={800} sx={{ mb: 1 }}>
             ข้อมูลผู้ใช้
           </Typography>
-          <UserDetailsPanel user={selected} />
+          {hasUser(selected) ? (
+            <UserDetailsPanel user={selected} />
+          ) : (
+            <Typography variant="body2" color="text.secondary">
+              เลือกผู้ใช้จากตารางด้านซ้ายเพื่อดูรายละเอียด
+            </Typography>
+          )}
         </Box>
       </Drawer>
 
-      {/* Dialogs */}
+      {/* Editor Dialog */}
       <UserEditorDialog
         open={editorOpen}
         onClose={() => setEditorOpen(false)}
         onSaved={() => {
           load();
           if (selected) {
-            // รีโหลดผู้ใช้ที่กำลังเปิดรายละเอียดอยู่
             fetchJSON<UserRow>(USER_API_ID(selected._id), {
               headers: { ...authHeadersObj },
             })
@@ -245,6 +243,8 @@ export default function AdminUsersPage() {
         allUsers={rows}
         authHeaders={authHeadersObj}
       />
+
+      {/* Reset password */}
       <ResetPasswordDialog
         open={resetOpen}
         onClose={() => setResetOpen(false)}
