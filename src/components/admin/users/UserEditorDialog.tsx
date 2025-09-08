@@ -1,8 +1,9 @@
-// src/components/admin/users/UserEditorDialog.tsx
 "use client";
 
 import { fetchJSON } from "@/lib/api";
-import { UserRow } from "@/types/user";
+import type { UserRow } from "@/types/user";
+import Visibility from "@mui/icons-material/Visibility";
+import VisibilityOff from "@mui/icons-material/VisibilityOff";
 import {
   Alert,
   Button,
@@ -12,6 +13,8 @@ import {
   DialogContent,
   DialogTitle,
   FormControlLabel,
+  IconButton,
+  InputAdornment,
   MenuItem,
   Stack,
   Switch,
@@ -22,9 +25,26 @@ import * as React from "react";
 // endpoint helper
 const USERS_API = (path = "") => `/api/admin/users${path}`;
 
-// รายการตำแหน่ง/แผนก (ตัวอย่าง – ปรับเพิ่ม/ลดได้)
-const POSITION_OPTIONS = ["Manager", "Staff", "Supervisor", "Lead", "Intern"];
-const DEPARTMENT_OPTIONS = ["IT", "HR", "Finance", "Operations", "Sales"];
+// ตัวเลือกแผนก/ตำแหน่ง
+const DEPARTMENT_OPTIONS = [
+  "IT",
+  "HR",
+  "Finance",
+  "Operation",
+  "Sales",
+  "Engineering",
+];
+const POSITION_OPTIONS = [
+  "Staff",
+  "Senior Staff",
+  "Supervisor",
+  "Manager",
+  "Head",
+  "Director",
+];
+
+// ตรวจ ObjectId
+const OID_RE = /^[0-9a-fA-F]{24}$/;
 
 type Props = {
   open: boolean;
@@ -35,6 +55,10 @@ type Props = {
   authHeaders: Record<string, string>;
 };
 
+function getId(u: any): string {
+  return String(u?.id || u?._id || "");
+}
+
 export default function UserEditorDialog({
   open,
   onClose,
@@ -43,7 +67,7 @@ export default function UserEditorDialog({
   allUsers,
   authHeaders,
 }: Props) {
-  const isEdit = !!editing?._id;
+  const isEdit = !!editing?._id || !!(editing as any)?.id;
 
   // form state
   const [email, setEmail] = React.useState("");
@@ -54,30 +78,34 @@ export default function UserEditorDialog({
   const [position, setPosition] = React.useState("");
   const [role, setRole] = React.useState<"user" | "staff" | "admin">("user");
 
-  // HOD
-  const [hod, setHod] = React.useState<string>(""); // เก็บเป็น ObjectId string ตาม DTO
+  // HOD (optional)
+  const [hodId, setHodId] = React.useState<string>("");
 
-  // permissions (จะ map → permission)
+  // permissions
   const [pCreate, setPCreate] = React.useState(false);
   const [pRead, setPRead] = React.useState(true);
   const [pUpdate, setPUpdate] = React.useState(false);
   const [pDelete, setPDelete] = React.useState(false);
   const [pApprove, setPApprove] = React.useState(false);
 
-  // password ใช้เฉพาะตอนสร้าง
+  // password (create only)
   const [password, setPassword] = React.useState("");
+  const [confirmPassword, setConfirmPassword] = React.useState("");
+  const [showPw1, setShowPw1] = React.useState(false);
+  const [showPw2, setShowPw2] = React.useState(false);
 
   const [saving, setSaving] = React.useState(false);
   const [err, setErr] = React.useState<string | null>(null);
 
-  // ผู้สมัครเป็น HOD: role=admin และตำแหน่ง Manager
+  // HOD candidates
   const hodCandidates = React.useMemo(() => {
     return (allUsers || []).filter((u) => {
-      const pos =
-        (u as any).position ?? (u as any).jobTitle ?? (u as any).title ?? "";
+      const pos = String(
+        (u as any).position ?? (u as any).jobTitle ?? (u as any).title ?? ""
+      ).toLowerCase();
       return (
-        String(u.role).toLowerCase() === "admin" &&
-        String(pos).toLowerCase() === "manager"
+        String(u.role || "").toLowerCase() === "admin" &&
+        ["manager", "head", "supervisor", "director"].includes(pos)
       );
     });
   }, [allUsers]);
@@ -92,31 +120,36 @@ export default function UserEditorDialog({
       setName(editing.name || "");
       setLastName(editing.lastName || "");
       setDepartment(editing.department || "");
-      setPosition((editing as any).position || "");
-      setRole((editing.role as any) || "user");
+      setPosition(
+        String(
+          (editing as any).position ??
+            (editing as any).jobTitle ??
+            (editing as any).title ??
+            ""
+        )
+      );
+      setRole(((editing.role as any) || "user") as any);
+      setHodId(
+        String(
+          (editing as any).hodId ??
+            (editing as any).managerId ??
+            (editing as any)?.hod?._id ??
+            (editing as any)?.hod?.id ??
+            ""
+        )
+      );
 
-      // hod รับได้ทั้ง user.hod เป็น object หรือ user.hod.id/_id หรือ user.hodId
-      const hodObj = (editing as any).hod ?? null;
-      const hodId =
-        (editing as any).hodId ||
-        hodObj?.id ||
-        hodObj?._id ||
-        (editing as any).managerId ||
-        "";
-      setHod(String(hodId || ""));
-
-      const perms =
-        (editing as any).permission ||
-        (editing as any).perms ||
-        (editing as any).permissions ||
-        {};
+      const perms = (editing as any).permission || (editing as any).perms || {};
       setPCreate(!!perms.create);
-      setPRead(perms.read !== false); // default true
+      setPRead(perms.read !== false);
       setPUpdate(!!perms.update);
       setPDelete(!!perms.delete);
       setPApprove(!!perms.approve);
 
       setPassword("");
+      setConfirmPassword("");
+      setShowPw1(false);
+      setShowPw2(false);
     } else {
       setEmail("");
       setUsername("");
@@ -125,42 +158,51 @@ export default function UserEditorDialog({
       setDepartment("");
       setPosition("");
       setRole("user");
-      setHod("");
-
+      setHodId("");
       setPCreate(false);
       setPRead(true);
       setPUpdate(false);
       setPDelete(false);
       setPApprove(false);
       setPassword("");
+      setConfirmPassword("");
+      setShowPw1(false);
+      setShowPw2(false);
     }
     setErr(null);
   }, [open, editing]);
 
+  // validate
   const validate = () => {
     if (!email.trim()) return "กรุณากรอกอีเมล";
     if (!/^\S+@\S+\.\S+$/.test(email)) return "รูปแบบอีเมลไม่ถูกต้อง";
     if (!username.trim()) return "กรุณากรอก Username";
     if (!name.trim()) return "กรุณากรอกชื่อ";
     if (!lastName.trim()) return "กรุณากรอกนามสกุล";
-    if (!isEdit && !password.trim()) return "กรุณากรอกรหัสผ่านสำหรับผู้ใช้ใหม่";
-
-    // กันซ้ำฝั่ง client เบาๆ
-    if (
-      !isEdit &&
-      allUsers.some(
-        (u) => (u.email || "").toLowerCase() === email.toLowerCase()
-      )
-    ) {
-      return "อีเมลนี้มีอยู่แล้ว";
+    if (!isEdit) {
+      if (!password.trim()) return "กรุณากรอกรหัสผ่านสำหรับผู้ใช้ใหม่";
+      if (password.trim().length < 6)
+        return "รหัสผ่านต้องมีอย่างน้อย 6 ตัวอักษร";
+      if (confirmPassword.trim() !== password.trim())
+        return "รหัสผ่านยืนยันไม่ตรงกัน";
     }
-    if (
-      !isEdit &&
-      allUsers.some(
-        (u) => (u.username || "").toLowerCase() === username.toLowerCase()
-      )
-    ) {
-      return "Username นี้มีอยู่แล้ว";
+    if (hodId && !OID_RE.test(hodId)) return "HOD ไม่ถูกต้อง";
+
+    if (!isEdit) {
+      if (
+        allUsers.some(
+          (u) => (u.email || "").toLowerCase() === email.toLowerCase()
+        )
+      ) {
+        return "อีเมลนี้มีอยู่แล้ว";
+      }
+      if (
+        allUsers.some(
+          (u) => (u.username || "").toLowerCase() === username.toLowerCase()
+        )
+      ) {
+        return "Username นี้มีอยู่แล้ว";
+      }
     }
     return null;
   };
@@ -175,15 +217,14 @@ export default function UserEditorDialog({
     setErr(null);
 
     try {
-      // —— สร้าง payload ให้ตรง DTO ——
       const payload: any = {
-        email: email.trim(),
+        email: email.trim().toLowerCase(),
         username: username.trim(),
-        department: department.trim() || undefined,
-        position: position.trim() || undefined,
         name: name.trim(),
         lastName: lastName.trim(),
-        role, // 'user' | 'staff' | 'admin'
+        role: String(role).toLowerCase(),
+        ...(department.trim() ? { department: department.trim() } : {}),
+        ...(position.trim() ? { position: position.trim() } : {}),
         permission: {
           create: pCreate,
           read: pRead,
@@ -193,16 +234,12 @@ export default function UserEditorDialog({
         },
       };
 
-      // ส่ง HOD เป็น field 'hod' (ObjectId string) ตาม DTO
-      if (hod) payload.hod = hod;
+      if (hodId && OID_RE.test(hodId)) payload.hod = hodId;
+      if (!isEdit) payload.password = password.trim();
 
-      // สร้างใหม่ต้องมี password
-      if (!isEdit && password.trim()) {
-        payload.password = password.trim();
-      }
-
-      const url = isEdit ? USERS_API(`/${editing!._id}`) : USERS_API();
-      const method = isEdit ? "PATCH" : "POST"; // <<< สำคัญ: ใช้ PATCH ตาม Nest
+      const id = getId(editing);
+      const url = isEdit ? USERS_API(`/${id}`) : USERS_API();
+      const method = isEdit ? "PATCH" : "POST";
 
       await fetchJSON<UserRow>(url, {
         method,
@@ -217,12 +254,8 @@ export default function UserEditorDialog({
       onClose();
     } catch (e: any) {
       const msg = String(e?.message || "บันทึกไม่สำเร็จ");
-      if (/401|unauthorized/i.test(msg))
-        setErr("ไม่ได้รับอนุญาต (Token ไม่ถูกต้อง/หมดอายุ)");
-      else if (/409|duplicate|exists|email|username/i.test(msg))
+      if (/409|duplicate|exists|email|username/i.test(msg))
         setErr("อีเมลหรือ Username ถูกใช้ไปแล้ว");
-      else if (/400|bad request/i.test(msg))
-        setErr("คำขอไม่ถูกต้อง (ตรวจรูปแบบฟิลด์ที่ส่ง)");
       else setErr(msg);
     } finally {
       setSaving(false);
@@ -245,7 +278,11 @@ export default function UserEditorDialog({
         )}
 
         {/* Email / Username */}
-        <Stack direction="row" spacing={2} sx={{ mb: 2 }}>
+        <Stack
+          direction={{ xs: "column", sm: "row" }}
+          spacing={2}
+          sx={{ mb: 2 }}
+        >
           <TextField
             label="อีเมล *"
             fullWidth
@@ -262,7 +299,11 @@ export default function UserEditorDialog({
         </Stack>
 
         {/* Name / LastName */}
-        <Stack direction="row" spacing={2} sx={{ mb: 2 }}>
+        <Stack
+          direction={{ xs: "column", sm: "row" }}
+          spacing={2}
+          sx={{ mb: 2 }}
+        >
           <TextField
             label="ชื่อ *"
             fullWidth
@@ -277,11 +318,15 @@ export default function UserEditorDialog({
           />
         </Stack>
 
-        {/* Department / Position (select) */}
-        <Stack direction="row" spacing={2} sx={{ mb: 2 }}>
+        {/* Department / Position */}
+        <Stack
+          direction={{ xs: "column", sm: "row" }}
+          spacing={2}
+          sx={{ mb: 2 }}
+        >
           <TextField
-            label="แผนก"
             select
+            label="แผนก (Department)"
             fullWidth
             value={department}
             onChange={(e) => setDepartment(e.target.value)}
@@ -295,11 +340,12 @@ export default function UserEditorDialog({
           </TextField>
 
           <TextField
-            label="ตำแหน่ง (Position)"
             select
+            label="ตำแหน่ง (Position)"
             fullWidth
             value={position}
             onChange={(e) => setPosition(e.target.value)}
+            helperText="เลือกตำแหน่งหลักของผู้ใช้"
           >
             <MenuItem value="">— ไม่ระบุ —</MenuItem>
             {POSITION_OPTIONS.map((p) => (
@@ -310,58 +356,100 @@ export default function UserEditorDialog({
           </TextField>
         </Stack>
 
-        {/* Role */}
-        <TextField
-          label="Role"
-          select
-          fullWidth
-          value={role}
-          onChange={(e) => setRole(e.target.value as any)}
+        {/* Role / HOD */}
+        <Stack
+          direction={{ xs: "column", sm: "row" }}
+          spacing={2}
           sx={{ mb: 2 }}
         >
-          <MenuItem value="user">user</MenuItem>
-          <MenuItem value="staff">staff</MenuItem>
-          <MenuItem value="admin">admin</MenuItem>
-        </TextField>
-
-        {/* HOD Selector (เฉพาะ Admin ที่เป็น Manager) */}
-        <TextField
-          label="HOD (Admin ที่เป็น Manager)"
-          select
-          fullWidth
-          value={hod}
-          onChange={(e) => setHod(e.target.value)}
-          sx={{ mb: 2 }}
-          helperText="เลือกหัวหน้าฝ่ายที่ดูแลผู้ใช้นี้ (ไม่บังคับ)"
-        >
-          <MenuItem value="">— ไม่ระบุ —</MenuItem>
-          {hodCandidates.map((u) => {
-            const id = String((u as any).id || (u as any)._id || "");
-            const label =
-              `${u.name || ""} ${u.lastName || ""}`.trim() ||
-              u.username ||
-              u.email ||
-              id;
-            return (
-              <MenuItem key={id} value={id}>
-                {label}
-                {u.department ? `  •  ${u.department}` : ""}
-                {(u as any).position ? `  •  ${(u as any).position}` : ""}
-              </MenuItem>
-            );
-          })}
-        </TextField>
-
-        {/* Password (create only) */}
-        {!isEdit && (
           <TextField
-            label="รหัสผ่าน (สำหรับผู้ใช้ใหม่) *"
+            label="Role"
+            select
             fullWidth
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
+            value={role}
+            onChange={(e) => setRole(e.target.value as any)}
+          >
+            <MenuItem value="user">user</MenuItem>
+            <MenuItem value="staff">staff</MenuItem>
+            <MenuItem value="admin">admin</MenuItem>
+          </TextField>
+
+          <TextField
+            label="HOD (Admin ที่เป็น Manager/Head/Supervisor/Director)"
+            select
+            fullWidth
+            value={hodId}
+            onChange={(e) => setHodId(e.target.value)}
+            helperText="เลือกหัวหน้าฝ่าย (ถ้ามี)"
+          >
+            <MenuItem value="">— ไม่ระบุ —</MenuItem>
+            {hodCandidates.map((u) => (
+              <MenuItem key={getId(u)} value={getId(u)}>
+                {`${u.name || ""} ${u.lastName || ""}`.trim() || u.username}
+                {u.department ? `  •  ${u.department}` : ""}
+                {(u as any).position || (u as any).jobTitle
+                  ? `  •  ${String((u as any).position || (u as any).jobTitle)}`
+                  : ""}
+              </MenuItem>
+            ))}
+          </TextField>
+        </Stack>
+
+        {/* Password & Confirm (create only) */}
+        {!isEdit && (
+          <Stack
+            direction={{ xs: "column", sm: "row" }}
+            spacing={2}
             sx={{ mb: 2 }}
-          />
+          >
+            <TextField
+              label="รหัสผ่าน (สำหรับผู้ใช้ใหม่) *"
+              fullWidth
+              type={showPw1 ? "text" : "password"}
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              helperText="อย่างน้อย 6 ตัวอักษร"
+              InputProps={{
+                endAdornment: (
+                  <InputAdornment position="end">
+                    <IconButton
+                      aria-label="toggle password visibility"
+                      onClick={() => setShowPw1((v) => !v)}
+                      edge="end"
+                    >
+                      {showPw1 ? <VisibilityOff /> : <Visibility />}
+                    </IconButton>
+                  </InputAdornment>
+                ),
+              }}
+            />
+            <TextField
+              label="ยืนยันรหัสผ่าน *"
+              fullWidth
+              type={showPw2 ? "text" : "password"}
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+              error={Boolean(confirmPassword) && confirmPassword !== password}
+              helperText={
+                Boolean(confirmPassword) && confirmPassword !== password
+                  ? "รหัสผ่านยืนยันไม่ตรงกัน"
+                  : " "
+              }
+              InputProps={{
+                endAdornment: (
+                  <InputAdornment position="end">
+                    <IconButton
+                      aria-label="toggle confirm password visibility"
+                      onClick={() => setShowPw2((v) => !v)}
+                      edge="end"
+                    >
+                      {showPw2 ? <VisibilityOff /> : <Visibility />}
+                    </IconButton>
+                  </InputAdornment>
+                ),
+              }}
+            />
+          </Stack>
         )}
 
         {/* Permissions */}

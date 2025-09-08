@@ -18,9 +18,11 @@ import {
   Card,
   CardContent,
   Drawer,
+  MenuItem,
   Paper,
   Snackbar,
   Stack,
+  TextField,
   Typography,
 } from "@mui/material";
 import { styled } from "@mui/material/styles";
@@ -50,6 +52,19 @@ function toHeaderObject(
   return h as Record<string, string>;
 }
 
+/** ปลอดภัย: คืน id จาก id/_id */
+function getId(u: any): string {
+  return String(u?.id || u?._id || "");
+}
+
+/** อ่านตำแหน่งจากคีย์ที่เป็นไปได้ */
+function getPosition(u: any): string {
+  return String(u?.position ?? u?.jobTitle ?? u?.title ?? "").trim();
+}
+
+const DEPARTMENT_OPTIONS = ["IT", "HR", "Finance", "Operation", "Sales", "Engineering"];
+const HOD_POSITIONS_ALLOW = ["Manager", "Head", "Supervisor"];
+
 export default function AdminUsersPage() {
   const { data: session } = useSession();
   const authHeaders = useAuthHeaders();
@@ -59,9 +74,10 @@ export default function AdminUsersPage() {
   );
 
   const perms = getMyPerms(session);
-  const canCreate = !!perms.create || !!perms.approve;
-  const canDelete = !!perms.delete || !!perms.approve;
-  const canUpdate = !!perms.update || !!perms.approve;
+  const isAdminRole = String((session as any)?.user?.role || "").toLowerCase() === "admin";
+  const canCreate = !!perms.create || !!perms.approve || isAdminRole;
+  const canDelete = !!perms.delete || !!perms.approve || isAdminRole; // ✅ แก้ให้ admin ลบได้แน่ๆ
+  const canUpdate = !!perms.update || !!perms.approve || isAdminRole;
 
   const [q, setQ] = React.useState("");
   const [rows, setRows] = React.useState<UserRow[]>([]);
@@ -74,6 +90,10 @@ export default function AdminUsersPage() {
 
   const [selected, setSelected] = React.useState<UserRow | null>(null);
   const [detailsOpen, setDetailsOpen] = React.useState(false);
+
+  // ฟิลเตอร์เพิ่ม
+  const [deptFilter, setDeptFilter] = React.useState<string>("");
+  const [hodOnlyFilter, setHodOnlyFilter] = React.useState<"all" | "hodOnly">("all");
 
   const [toast, setToast] = React.useState<{
     open: boolean;
@@ -91,12 +111,34 @@ export default function AdminUsersPage() {
       const data = await fetchJSON<UserRow[]>(USERS_API, {
         headers: { ...authHeadersObj },
       });
-      const filtered = (data || []).filter((u) => {
+
+      let list = (data || []).filter((u) => {
         const hay =
-          `${u.username || ""} ${u.name || ""} ${u.lastName || ""} ${u.email || ""} ${u.department || ""}`.toLowerCase();
+          `${u.username || ""} ${u.name || ""} ${u.lastName || ""} ${u.email || ""} ${u.department || ""} ${getPosition(
+            u as any
+          )}`.toLowerCase();
         return !q.trim() || hay.includes(q.trim().toLowerCase());
       });
-      setRows(filtered);
+
+      if (deptFilter) {
+        list = list.filter(
+          (u) =>
+            String(u.department || "").trim().toLowerCase() ===
+            deptFilter.toLowerCase()
+        );
+      }
+
+      if (hodOnlyFilter === "hodOnly") {
+        list = list.filter(
+          (u) =>
+            String(u.role || "").toLowerCase() === "admin" &&
+            ["manager", "head", "supervisor"].includes(
+              getPosition(u as any).toLowerCase()
+            )
+        );
+      }
+
+      setRows(list);
     } catch (e: any) {
       setToast({
         open: true,
@@ -107,22 +149,27 @@ export default function AdminUsersPage() {
     } finally {
       setLoading(false);
     }
-  }, [q, authHeadersObj]);
+  }, [q, deptFilter, hodOnlyFilter, authHeadersObj]);
 
   React.useEffect(() => {
     load();
   }, [load]);
 
   const confirmDelete = async (u: UserRow) => {
-    if (!canDelete) return;
+    if (!canDelete) {
+      setToast({ open: true, msg: "คุณไม่มีสิทธิ์ลบผู้ใช้", sev: "error" });
+      return;
+    }
     if (!window.confirm(`ต้องการลบผู้ใช้ "${u.username}" ใช่หรือไม่?`)) return;
     try {
-      await fetchJSON(USER_API_ID(u._id), {
+      const id = getId(u);
+      if (!id) throw new Error("ไม่พบรหัสผู้ใช้ (id/_id)");
+      await fetchJSON(USER_API_ID(id), {
         method: "DELETE",
         headers: { ...authHeadersObj },
       });
       setToast({ open: true, msg: "ลบผู้ใช้สำเร็จ", sev: "success" });
-      if (selected?._id === u._id) {
+      if (getId(selected) === id) {
         setSelected(null);
         setDetailsOpen(false);
       }
@@ -131,6 +178,39 @@ export default function AdminUsersPage() {
       setToast({ open: true, msg: e?.message || "ลบไม่สำเร็จ", sev: "error" });
     }
   };
+
+  function FiltersBar() {
+    return (
+      <Stack direction={{ xs: "column", md: "row" }} spacing={2} sx={{ mt: 1 }}>
+        <TextField
+          select
+          label="แผนก (Department)"
+          value={deptFilter}
+          onChange={(e) => setDeptFilter(e.target.value)}
+          sx={{ minWidth: 220 }}
+        >
+          <MenuItem value="">ทั้งหมด</MenuItem>
+          {DEPARTMENT_OPTIONS.map((d) => (
+            <MenuItem key={d} value={d}>
+              {d}
+            </MenuItem>
+          ))}
+        </TextField>
+
+        <TextField
+          select
+          label="กรอง HOD"
+          value={hodOnlyFilter}
+          onChange={(e) => setHodOnlyFilter(e.target.value as any)}
+          sx={{ minWidth: 220 }}
+          helperText="เฉพาะ HOD = role: admin + position: Manager/Head/Supervisor"
+        >
+          <MenuItem value="all">แสดงทั้งหมด</MenuItem>
+          <MenuItem value="hodOnly">เฉพาะ HOD</MenuItem>
+        </TextField>
+      </Stack>
+    );
+  }
 
   return (
     <Box sx={{ p: 3 }}>
@@ -164,16 +244,11 @@ export default function AdminUsersPage() {
         </Button>
       </Stack>
 
-      {/* Toolbar */}
-      <Card
-        elevation={0}
-        sx={{
-          border: (t) => `1px solid ${t.palette.divider}`,
-          borderRadius: 2,
-        }}
-      >
+      {/* Toolbar + Filters */}
+      <Card elevation={0} sx={{ border: (t) => `1px solid ${t.palette.divider}`, borderRadius: 2 }}>
         <CardContent sx={{ py: 1.5 }}>
           <UsersToolbar q={q} setQ={setQ} />
+          <FiltersBar />
         </CardContent>
       </Card>
 
@@ -209,14 +284,14 @@ export default function AdminUsersPage() {
         anchor="right"
         open={detailsOpen}
         onClose={() => setDetailsOpen(false)}
-        PaperProps={{ sx: { width: { xs: "100%", sm: 420 } } }}
+        PaperProps={{ sx: { width: { xs: "100%", sm: 480 } } }}
       >
         <Box sx={{ p: 2 }}>
           <Typography variant="h6" fontWeight={800} sx={{ mb: 1 }}>
             ข้อมูลผู้ใช้
           </Typography>
           {hasUser(selected) ? (
-            <UserDetailsPanel user={selected} />
+            <UserDetailsPanel user={selected} allUsers={rows} />
           ) : (
             <Typography variant="body2" color="text.secondary">
               เลือกผู้ใช้จากตารางด้านซ้ายเพื่อดูรายละเอียด
@@ -232,11 +307,12 @@ export default function AdminUsersPage() {
         onSaved={() => {
           load();
           if (selected) {
-            fetchJSON<UserRow>(USER_API_ID(selected._id), {
-              headers: { ...authHeadersObj },
-            })
-              .then((u) => setSelected(u))
-              .catch(() => {});
+            const id = getId(selected);
+            if (id) {
+              fetchJSON<UserRow>(USER_API_ID(id), { headers: { ...authHeadersObj } })
+                .then((u) => setSelected(u))
+                .catch(() => {});
+            }
           }
         }}
         editing={editing}
