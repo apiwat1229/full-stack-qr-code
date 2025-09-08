@@ -93,11 +93,11 @@ const navigationConfig: FuseNavItemType[] = [
 				end: true,
 			},
 			{
-				id: 'checkout-checked',
+				id: 'checkout',
 				title: 'Weight Out',
 				type: 'item',
 				icon: 'lucide:log-out',
-				url: '/check-out/checked',
+				url: '/check-out',
 				end: true,
 			},
 			{
