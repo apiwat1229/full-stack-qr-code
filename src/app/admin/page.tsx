@@ -37,9 +37,32 @@ const Carded = styled(Paper)(({ theme }) => ({
   background: theme.palette.background.paper,
 }));
 
+/** แปลง HeadersInit → Record<string, string> */
+function toHeaderObject(
+  h: HeadersInit | undefined | null
+): Record<string, string> {
+  if (!h) return {};
+  // ถ้าเป็น Headers instance
+  if (typeof Headers !== "undefined" && h instanceof Headers) {
+    return Object.fromEntries(h.entries());
+  }
+  // ถ้าเป็น tuple array
+  if (Array.isArray(h)) {
+    return Object.fromEntries(h);
+  }
+  // ถ้าเป็น plain object อยู่แล้ว
+  return h as Record<string, string>;
+}
+
 export default function AdminUsersPage() {
   const { data: session } = useSession();
   const authHeaders = useAuthHeaders();
+
+  // ✅ ใช้เป็น object ที่ type ตรงกับ props และ fetch init
+  const authHeadersObj = React.useMemo<Record<string, string>>(
+    () => toHeaderObject(authHeaders),
+    [authHeaders]
+  );
 
   const perms = getMyPerms(session);
   const canCreate = !!perms.create || !!perms.approve;
@@ -72,7 +95,7 @@ export default function AdminUsersPage() {
     try {
       setLoading(true);
       const data = await fetchJSON<UserRow[]>(USERS_API, {
-        headers: { ...authHeaders },
+        headers: { ...authHeadersObj },
       });
       const filtered = (data || []).filter((u) => {
         const hay =
@@ -90,7 +113,7 @@ export default function AdminUsersPage() {
     } finally {
       setLoading(false);
     }
-  }, [q, authHeaders]);
+  }, [q, authHeadersObj]);
 
   React.useEffect(() => {
     load();
@@ -103,7 +126,7 @@ export default function AdminUsersPage() {
     try {
       await fetchJSON(USER_API_ID(u._id), {
         method: "DELETE",
-        headers: { ...authHeaders },
+        headers: { ...authHeadersObj },
       });
       setToast({ open: true, msg: "ลบผู้ใช้สำเร็จ", sev: "success" });
       if (selected?._id === u._id) {
@@ -212,7 +235,7 @@ export default function AdminUsersPage() {
           if (selected) {
             // รีโหลดผู้ใช้ที่กำลังเปิดรายละเอียดอยู่
             fetchJSON<UserRow>(USER_API_ID(selected._id), {
-              headers: { ...authHeaders },
+              headers: { ...authHeadersObj },
             })
               .then((u) => setSelected(u))
               .catch(() => {});
@@ -220,7 +243,7 @@ export default function AdminUsersPage() {
         }}
         editing={editing}
         allUsers={rows}
-        authHeaders={authHeaders}
+        authHeaders={authHeadersObj}
       />
       <ResetPasswordDialog
         open={resetOpen}
@@ -233,7 +256,7 @@ export default function AdminUsersPage() {
             sev: "success",
           })
         }
-        authHeaders={authHeaders}
+        authHeaders={authHeadersObj}
       />
 
       {/* Snackbar */}

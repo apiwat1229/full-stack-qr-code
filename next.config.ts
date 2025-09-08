@@ -5,18 +5,19 @@ import runtimeCaching from 'next-pwa/cache';
 
 const isTurbopack = process.env.TURBOPACK === '1';
 const isProd = process.env.NODE_ENV === 'production';
-const API_PROXY_TARGET = process.env.API_PROXY_TARGET; // Used only in dev
 
-// Read Host and Port from .env for dev
+// Used only in dev (proxy to your backend)
+const API_PROXY_TARGET = process.env.API_PROXY_TARGET;
+
+// Read Host and Port from .env for dev CORS header (optional)
 const APP_ORIGIN_HOST = process.env.APP_ORIGIN_HOST;
 const PORT = process.env.PORT || '4560';
 
 const baseConfig: NextConfig = {
 	reactStrictMode: false,
-	eslint: { ignoreDuringBuilds: process.env.NODE_ENV === 'production' },
+	eslint: { ignoreDuringBuilds: isProd },
 	typescript: {},
-	// This turbopack key can remain; it only applies when the flag is used.
-	turbopack: { rules: {} },
+	// ใส่ webpack config เฉพาะตอนไม่ได้ใช้ Turbopack
 	...(!isTurbopack && {
 		webpack: (config) => {
 			if (config.module?.rules) {
@@ -42,16 +43,27 @@ const baseConfig: NextConfig = {
 		return [];
 	},
 
-	// ✅ Use the 'devServer' block for the Webpack dev server
-	devServer: {
-		allowedDevOrigins:
-			!isProd && APP_ORIGIN_HOST
-				? [`http://${APP_ORIGIN_HOST}:${PORT}`]
-				: undefined,
+	// ✅ ห้ามคืน route ที่ headers: [] เปล่า ๆ
+	// ใส่เฉพาะตอน dev และตั้งค่าไว้จริงเท่านั้น
+	async headers() {
+		const routes: Array<{ source: string; headers: { key: string; value: string }[] }> = [];
+
+		if (!isProd && APP_ORIGIN_HOST) {
+			routes.push({
+				source: '/(.*)',
+				headers: [
+					{ key: 'Access-Control-Allow-Origin', value: `http://${APP_ORIGIN_HOST}:${PORT}` },
+					{ key: 'Access-Control-Allow-Methods', value: 'GET,POST,PUT,PATCH,DELETE,OPTIONS' },
+					{ key: 'Access-Control-Allow-Headers', value: 'Content-Type,Authorization' },
+				],
+			});
+		}
+
+		return routes; // ถ้าไม่มีอะไรจะเป็น [] — ถูกต้อง
 	},
 };
 
-// Enable PWA only in production + webpack (not turbopack)
+// เปิด PWA เฉพาะ production และเมื่อใช้ webpack (ไม่ใช่ turbopack)
 const withPWAwrapper =
 	isProd && !isTurbopack
 		? withPWA({

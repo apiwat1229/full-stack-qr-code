@@ -1,0 +1,37 @@
+name: Deploy (rebuild on server)
+on:
+  workflow_dispatch: {} # กด Run workflow เองเมื่ออยาก build ใหม่
+
+jobs:
+  rebuild:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # อัปโหลดซอร์สล่าสุดขึ้นไปก่อน (คราวนี้ยังคงไม่ทับ .next เดิมจนกว่าจะ build เสร็จ)
+      - name: Rsync to server (source update)
+        uses: burnett01/rsync-deployments@5.2
+        with:
+          switches: -avz --delete --exclude='.git/' --exclude='node_modules/' --exclude='.next/'
+          path: .
+          remote_path: /var/www/fuse-nextjs/
+          remote_host: 122.154.46.20
+          remote_user: adminytrc
+          remote_key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      # สั่ง build ที่เซิร์ฟเวอร์ + รีสตาร์ต PM2
+      - name: Build & restart on server
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: 122.154.46.20
+          username: adminytrc
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            set -e
+            cd /var/www/fuse-nextjs
+            # ลง dependency ตาม lockfile แบบ production
+            npm ci --omit=dev
+            npm run build
+            NODE_ENV=production PORT=3000 pm2 restart fuse-nextjs --update-env || \
+            NODE_ENV=production PORT=3000 pm2 start "npm run start" --name fuse-nextjs --cwd /var/www/fuse-nextjs --update-env
+            pm2 save

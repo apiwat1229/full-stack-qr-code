@@ -1,0 +1,36 @@
+name: Deploy (update only)
+on:
+  push:
+    branches: ["main"] # แก้เป็นสาขาที่คุณใช้จริง
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # อัปโหลดไฟล์ขึ้นเซิร์ฟเวอร์ แต่ "เก็บ .next เดิมไว้"
+      # - ใช้ --delete เพื่อลบไฟล์ที่ถูกลบใน repo ออกจากเซิร์ฟเวอร์
+      # - exclude .next/ และ node_modules/ เพื่อไม่ไปทับ build/deps เดิม
+      - name: Rsync to server (no build)
+        uses: burnett01/rsync-deployments@5.2
+        with:
+          switches: -avz --delete --exclude='.git/' --exclude='node_modules/' --exclude='.next/'
+          path: .
+          remote_path: /var/www/fuse-nextjs/
+          remote_host: 122.154.46.20
+          remote_user: adminytrc
+          remote_key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      - name: PM2 restart
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: 122.154.46.20
+          username: adminytrc
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            cd /var/www/fuse-nextjs
+            # รีสตาร์ตโดยไม่ build ใหม่
+            NODE_ENV=production PORT=3000 pm2 restart fuse-nextjs --update-env || \
+            NODE_ENV=production PORT=3000 pm2 start "npm run start" --name fuse-nextjs --cwd /var/www/fuse-nextjs --update-env
+            pm2 save
