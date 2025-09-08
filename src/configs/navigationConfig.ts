@@ -1,4 +1,3 @@
-// src/app/(your-path)/navigationConfig.ts
 import { FuseNavItemType } from '@fuse/core/FuseNavigation/types/FuseNavItemType';
 import i18n from '@i18n';
 import ar from './navigation-i18n/ar';
@@ -10,6 +9,24 @@ i18n.addResourceBundle('tr', 'navigation', tr);
 i18n.addResourceBundle('ar', 'navigation', ar);
 
 const navigationConfig: FuseNavItemType[] = [
+	// ✅ Admin (ด้านบนสุด)
+	{
+		id: 'admin',
+		title: 'Admin',
+		type: 'group',
+		icon: 'lucide:shield-check',
+		children: [
+			{
+				id: 'users',
+				title: 'Users Management',
+				type: 'item',
+				icon: 'lucide:user-cog',
+				url: '/admin/user-list',   // → http://localhost:4560/admin/user-list
+				end: true,
+			},
+		],
+	},
+
 	{
 		id: 'about-me',
 		title: 'About Me',
@@ -53,7 +70,6 @@ const navigationConfig: FuseNavItemType[] = [
 		],
 	},
 
-	// ✅ Truck Scale
 	{
 		id: 'truck-scale',
 		title: 'Truck Scale',
@@ -80,8 +96,8 @@ const navigationConfig: FuseNavItemType[] = [
 				id: 'checkout-checked',
 				title: 'Weight Out',
 				type: 'item',
-				icon: 'lucide:scale-3d',   // หรือใช้ lucide:log-out ถ้าอยากสื่อว่า "ออก"
-				url: '#',
+				icon: 'lucide:log-out',
+				url: '/check-out/checked',
 				end: true,
 			},
 			{
@@ -91,7 +107,7 @@ const navigationConfig: FuseNavItemType[] = [
 				icon: 'lucide:archive',
 				url: '/check-in/history',
 				end: true,
-			}
+			},
 		],
 	},
 ];
