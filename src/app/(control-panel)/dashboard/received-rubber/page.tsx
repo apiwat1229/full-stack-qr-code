@@ -1,4 +1,5 @@
-// src/app/check-in/history/page.tsx
+// src/app/(control-panel)/dashboard/received-rubber/page.tsx
+
 "use client";
 
 import dayjs, { Dayjs } from "dayjs";
@@ -11,14 +12,15 @@ import SearchIcon from "@mui/icons-material/Search";
 import {
   Alert,
   Box,
-  Button,
   Chip,
   FormControl,
   FormLabel,
   IconButton,
   InputAdornment,
+  LinearProgress,
   MenuItem,
   Paper,
+  Select,
   Snackbar,
   Stack,
   Tab,
@@ -56,10 +58,9 @@ const RADIUS = 1;
 const FIELD_PROPS = { size: "small", variant: "outlined" } as const;
 const fieldSx = { "& .MuiOutlinedInput-root": { borderRadius: 1 } };
 
-// ช่วงเวลา 08:00–20:00 (สำหรับกราฟแบบรายชั่วโมง)
-const H_START = 8;
-const H_END = 20; // inclusive
-const H_LEN = H_END - H_START + 1;
+// ค่า default ของกราฟ (แก้ได้จาก selector ข้างหัวกราฟ)
+const DEF_H_START = 8;
+const DEF_H_END = 20;
 
 /* ================= Types ================= */
 type BookingView = {
@@ -77,7 +78,7 @@ type BookingView = {
   recorder?: string;
   checkInTime?: string | null;
 
-  // น้ำหนัก
+  // weights
   weightIn?: number | null;
   weightInHead?: number | null;
   weightInTrailer?: number | null;
@@ -86,38 +87,19 @@ type BookingView = {
   weightOutTrailer?: number | null;
 };
 
-type TimePreset = "all" | "am" | "pm" | "custom";
+type TabKey = 0 | 1 | 2; // 0: Day, 1: Week, 2: Month/Range
 
 type Summary = {
-  totalBookings: number;
-  checkedIn: number;
-  completedOut: number;
-  uniqueSupAll: number;
-  completion: number; // % checked-in / total
-  totalInKg: number; // ผลรวมน้ำหนักเข้า
-  totalOutKg: number; // ผลรวมน้ำหนักออก
-  netKg: number; // out - in
+  totalBookings: number; // ทั้งหมดของช่วง
+  inProgress: number; // เช็คอินแล้วแต่ยังไม่ออก
 };
 
-// ===== Helpers =====
-const fmtKg = (n?: number | null) =>
-  n == null ? "-" : n.toLocaleString(undefined, { maximumFractionDigits: 0 });
-
+/* ===== Helpers ===== */
+const fmtKg = (n?: number | null) => (n == null ? "-" : n.toLocaleString());
 const isTrailer = (truckType?: string) =>
   (truckType || "").toLowerCase().includes("พ่วง") ||
   (truckType || "").toLowerCase().includes("trailer");
 
-const weightInTotal = (r: BookingView) =>
-  isTrailer(r.truckType)
-    ? (r.weightInHead ?? 0) + (r.weightInTrailer ?? 0)
-    : (r.weightIn ?? 0);
-
-const weightOutTotal = (r: BookingView) =>
-  isTrailer(r.truckType)
-    ? (r.weightOutHead ?? 0) + (r.weightOutTrailer ?? 0)
-    : (r.weightOut ?? 0);
-
-// แสดงผล In/Out สำหรับรถพ่วงเป็น "หัว / หาง"
 const showIn = (r: BookingView) =>
   isTrailer(r.truckType)
     ? `${fmtKg(r.weightInHead)} / ${fmtKg(r.weightInTrailer)}`
@@ -128,13 +110,32 @@ const showOut = (r: BookingView) =>
     ? `${fmtKg(r.weightOutHead)} / ${fmtKg(r.weightOutTrailer)}`
     : fmtKg(r.weightOut);
 
-const calcNet = (r: BookingView): number | null => {
-  const outAny = isTrailer(r.truckType)
-    ? r.weightOutHead != null || r.weightOutTrailer != null
-    : r.weightOut != null;
-  if (!outAny) return null;
-  return weightOutTotal(r) - weightInTotal(r);
+// Net จริง (อาจติดลบ) และ Net สำหรับแสดง (abs)
+const calcNetRaw = (r: BookingView): number | null => {
+  if (isTrailer(r.truckType)) {
+    const inSum = (r.weightInHead ?? 0) + (r.weightInTrailer ?? 0) || null;
+    const outSum = (r.weightOutHead ?? 0) + (r.weightOutTrailer ?? 0) || null;
+    if (outSum == null) return null; // ยังไม่ออก
+    return (outSum ?? 0) - (inSum ?? 0);
+  }
+  if (r.weightOut == null) return null;
+  return (r.weightOut ?? 0) - (r.weightIn ?? 0);
 };
+const calcNetShown = (r: BookingView): number | null => {
+  const v = calcNetRaw(r);
+  return v == null ? null : Math.abs(v);
+};
+
+async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(url, {
+    cache: "no-store",
+    credentials: "include",
+    ...init,
+  });
+  const txt = await res.text().catch(() => "");
+  if (!res.ok) throw new Error(txt || `HTTP ${res.status}`);
+  return txt ? (JSON.parse(txt) as T) : ({} as T);
+}
 
 function rubberChipSx(name?: string) {
   const n = (name || "").toLowerCase();
@@ -155,18 +156,6 @@ function joinSupplierName(xp: any, raw: any) {
   return `${xp?.title ?? ""}${xp?.firstName ?? raw?.firstName ?? ""} ${xp?.lastName ?? raw?.lastName ?? ""}`.trim();
 }
 
-async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, {
-    cache: "no-store",
-    credentials: "include",
-    ...init,
-  });
-  const txt = await res.text().catch(() => "");
-  if (!res.ok) throw new Error(txt || `HTTP ${res.status}`);
-  return txt ? (JSON.parse(txt) as T) : ({} as T);
-}
-
-/** map event -> BookingView (รองรับ extendedProps จาก backend) */
 function normalizeFromEvent(raw: any): BookingView {
   const xp = raw?.extendedProps ?? {};
   return {
@@ -192,7 +181,7 @@ function normalizeFromEvent(raw: any): BookingView {
     recorder: xp.recorded_by ?? "",
     checkInTime: xp.check_in_time ?? null,
 
-    // น้ำหนัก
+    // weights
     weightIn: xp.weight_in ?? null,
     weightInHead: xp.weight_in_head ?? null,
     weightInTrailer: xp.weight_in_trailer ?? null,
@@ -206,17 +195,26 @@ function normalizeFromEvent(raw: any): BookingView {
 export default function CheckInHistoryPage() {
   const theme = useTheme();
 
-  // Filters
-  const [date, setDate] = React.useState<Dayjs | null>(dayjs());
-  const [timePreset, setTimePreset] = React.useState<TimePreset>("all");
-  const [customStart, setCustomStart] = React.useState("08:00");
-  const [customEnd, setCustomEnd] = React.useState("17:00");
+  // Tabs & date range (ย้ายมาไว้ใน Overview แล้ว)
+  const [tab, setTab] = React.useState<TabKey>(2); // เริ่มที่ Month/Range ตามภาพ
+  const [dateFrom, setDateFrom] = React.useState<Dayjs | null>(
+    dayjs().startOf("month")
+  );
+  const [dateTo, setDateTo] = React.useState<Dayjs | null>(
+    dayjs().endOf("month")
+  );
+
+  // Search
   const [q, setQ] = React.useState("");
 
-  // Data (รายวัน/รายสัปดาห์สำหรับตาราง)
+  // Chart hour-range (เฉพาะกราฟ)
+  const [hStart, setHStart] = React.useState<number>(DEF_H_START);
+  const [hEnd, setHEnd] = React.useState<number>(DEF_H_END);
+
+  // Data (ตามช่วง)
   const [loading, setLoading] = React.useState(false);
-  const [rowsDay, setRowsDay] = React.useState<BookingView[]>([]);
-  const [rowsWeek, setRowsWeek] = React.useState<BookingView[]>([]);
+  const [rowsAll, setRowsAll] = React.useState<BookingView[]>([]);
+  const [rowsCheckedIn, setRowsCheckedIn] = React.useState<BookingView[]>([]);
 
   const [toast, setToast] = React.useState<{
     open: boolean;
@@ -228,293 +226,218 @@ export default function CheckInHistoryPage() {
   const [page, setPage] = React.useState(0);
   const [rowsPerPage, setRowsPerPage] = React.useState(10);
 
-  // Tabs (0: Day, 1: Week)
-  const [chartTab, setChartTab] = React.useState<0 | 1>(0);
-  const [chartLoading, setChartLoading] = React.useState(false);
-
-  // Summary
+  // Summary cards
   const [summary, setSummary] = React.useState<Summary>({
     totalBookings: 0,
-    checkedIn: 0,
-    completedOut: 0,
-    uniqueSupAll: 0,
-    completion: 0,
-    totalInKg: 0,
-    totalOutKg: 0,
-    netKg: 0,
+    inProgress: 0,
   });
 
-  // Derived
-  const dateISO = React.useMemo(
-    () => (date ? date.format("YYYY-MM-DD") : dayjs().format("YYYY-MM-DD")),
-    [date]
-  );
-  const windowRange = React.useMemo(() => {
-    if (timePreset === "all") return { s: "00:00", e: "23:59" };
-    if (timePreset === "am") return { s: "08:00", e: "12:00" };
-    if (timePreset === "pm") return { s: "12:00", e: "17:00" };
-    return { s: customStart, e: customEnd };
-  }, [timePreset, customStart, customEnd]);
-
-  // ---------- utilities ----------
-  function applyTimeAndSearch(rows: BookingView[]) {
-    const inWindow =
-      timePreset === "all"
-        ? rows
-        : rows.filter(
-            (r) =>
-              r.startTime &&
-              r.startTime >= windowRange.s &&
-              r.startTime <= windowRange.e
-          );
-
-    const term = q.trim().toLowerCase();
-    return term
-      ? inWindow.filter(
-          (r) =>
-            r.bookingCode?.toLowerCase().includes(term) ||
-            r.supplierName?.toLowerCase().includes(term) ||
-            r.supCode?.toLowerCase().includes(term) ||
-            r.truckRegister?.toLowerCase().includes(term)
-        )
-      : inWindow;
-  }
-
-  function buildSummary(rows: BookingView[]): Summary {
-    const totalBookings = rows.length;
-    const checkedRows = rows.filter((r) => !!r.checkInTime);
-    const checkedIn = checkedRows.length;
-
-    const completedOut = rows.filter((r) =>
-      isTrailer(r.truckType)
-        ? r.weightOutHead != null || r.weightOutTrailer != null
-        : r.weightOut != null
-    ).length;
-
-    const uniqueSupAll = new Set(
-      rows.map((r) => `${r.supCode}|${r.supplierName}`)
-    ).size;
-
-    const totalInKg = rows.reduce((sum, r) => sum + weightInTotal(r), 0);
-    const totalOutKg = rows.reduce((sum, r) => sum + weightOutTotal(r), 0);
-    const netKg = totalOutKg - totalInKg;
-
-    const completion =
-      totalBookings > 0 ? Math.round((checkedIn / totalBookings) * 100) : 0;
-
-    return {
-      totalBookings,
-      checkedIn,
-      completedOut,
-      uniqueSupAll,
-      completion,
-      totalInKg,
-      totalOutKg,
-      netKg,
-    };
-  }
-
-  /* ---------- โหลดรายวัน ---------- */
-  const loadDay = React.useCallback(async () => {
-    setLoading(true);
-    try {
-      const events = await fetchJSON<any[]>(EVENTS_API(dateISO));
-      const all = (events || []).map(normalizeFromEvent);
-      const filtered = applyTimeAndSearch(all)
-        // จัดกลุ่มเวลาเช็คอินใหม่สุดก่อน
-        .sort((a, b) => {
-          const at = a.checkInTime ? +new Date(a.checkInTime) : 0;
-          const bt = b.checkInTime ? +new Date(b.checkInTime) : 0;
-          return bt - at;
-        });
-
-      setRowsDay(filtered);
-      setPage(0);
-
-      // summary (เฉพาะชุดที่ผ่านตัวกรอง)
-      setSummary(buildSummary(filtered));
-    } catch (e: any) {
-      setToast({
-        open: true,
-        msg: e?.message || "โหลดข้อมูลรายวันไม่สำเร็จ",
-        sev: "error",
-      });
-      setRowsDay([]);
-      setSummary(buildSummary([]));
-    } finally {
-      setLoading(false);
-    }
-  }, [dateISO, timePreset, windowRange.s, windowRange.e, q]);
-
-  /* ---------- โหลดรายสัปดาห์ ---------- */
-  const loadWeek = React.useCallback(async () => {
-    setLoading(true);
-    try {
-      const base = dayjs(dateISO);
-      const startOfWeek = base.startOf("week").add(1, "day"); // Mon
-      const weekDays = _.range(0, 7).map((i) => startOfWeek.add(i, "day"));
-
-      const allRows: BookingView[] = [];
-      for (const d of weekDays) {
-        const ev = await fetchJSON<any[]>(EVENTS_API(d.format("YYYY-MM-DD")));
-        allRows.push(...(ev || []).map(normalizeFromEvent));
-      }
-
-      const filtered = applyTimeAndSearch(allRows).sort((a, b) => {
-        const at = a.checkInTime ? +new Date(a.checkInTime) : 0;
-        const bt = b.checkInTime ? +new Date(b.checkInTime) : 0;
-        return bt - at;
-      });
-
-      setRowsWeek(filtered);
-      setPage(0);
-
-      // summary (สรุปของทั้งสัปดาห์ที่ผ่านตัวกรอง)
-      setSummary(buildSummary(filtered));
-    } catch (e: any) {
-      setToast({
-        open: true,
-        msg: e?.message || "โหลดข้อมูลรายสัปดาห์ไม่สำเร็จ",
-        sev: "error",
-      });
-      setRowsWeek([]);
-      setSummary(buildSummary([]));
-    } finally {
-      setLoading(false);
-    }
-  }, [dateISO, timePreset, windowRange.s, windowRange.e, q]);
-
-  // โหลดตามแท็บ
-  React.useEffect(() => {
-    const t = setTimeout(() => {
-      chartTab === 0 ? loadDay() : loadWeek();
-    }, 200);
-    return () => clearTimeout(t);
-  }, [chartTab, loadDay, loadWeek]);
-
-  /* ---------- Chart ---------- */
+  // สร้าง labels ตามชั่วโมงที่เลือก
   const hourLabels = React.useMemo(
     () =>
       Array.from(
-        { length: H_LEN },
-        (_, i) => `${String(H_START + i).padStart(2, "0")}:00`
+        { length: Math.max(0, hEnd - hStart + 1) },
+        (_, i) => `${String(hStart + i).padStart(2, "0")}:00`
       ),
-    []
+    [hStart, hEnd]
   );
 
-  function sumByHour(rows: BookingView[], mode: "in" | "out") {
-    const vals = Array(H_LEN).fill(0);
-    for (const r of rows) {
-      if (!r.checkInTime) continue;
-      const h = dayjs(r.checkInTime).hour();
-      if (h < H_START || h > H_END) continue;
-      vals[h - H_START] += mode === "in" ? weightInTotal(r) : weightOutTotal(r);
-    }
-    return vals;
-  }
-
-  const labelsMonSun = () => ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-  function dayIndexMonSun(d: Dayjs) {
-    const js = d.day();
-    return js === 0 ? 6 : js - 1;
-  }
-
-  const [chartLabels, setChartLabels] = React.useState<string[]>(hourLabels);
-  const [chartSeries, setChartSeries] = React.useState<any[]>([
-    { name: "In (kg)", type: "column", data: Array(H_LEN).fill(0) },
-    { name: "Out (kg)", type: "column", data: Array(H_LEN).fill(0) },
-  ]);
+  // Chart options: BAR + dataLabels อยู่กึ่งกลางแท่ง (แนวนอน)
   const chartOptions: ApexOptions = React.useMemo(
     () => ({
       chart: {
         fontFamily: "inherit",
         foreColor: "inherit",
         height: "100%",
-        type: "line",
+        type: "bar",
         toolbar: { show: false },
         zoom: { enabled: false },
       },
-      colors: [theme.palette.primary.main, theme.palette.secondary.main],
-      labels: chartLabels,
-      dataLabels: { enabled: false },
+      colors: [theme.palette.grey[800]],
+      labels: hourLabels,
+      dataLabels: {
+        enabled: true,
+        formatter: (val: number) => (val ? val.toLocaleString() : "0"),
+        background: { enabled: false },
+        style: { fontWeight: 700 }, // ตัวเลขหนา-ชัด
+      },
       grid: { borderColor: theme.palette.divider },
-      legend: { show: true },
-      plotOptions: { bar: { columnWidth: "55%" } },
-      states: { hover: { filter: { type: "darken" } } },
-      stroke: { width: [0, 0] },
-      tooltip: {
-        followCursor: true,
-        theme: theme.palette.mode,
-        y: {
-          formatter: (val) =>
-            Number(val).toLocaleString(undefined, {
-              maximumFractionDigits: 0,
-            }) + " kg",
+      legend: { show: false },
+      plotOptions: {
+        bar: {
+          columnWidth: "55%",
+          dataLabels: {
+            position: "center", // ให้อยู่กลางแท่ง และเป็นแนวนอน
+          },
         },
       },
+      states: { hover: { filter: { type: "darken" } } },
+      tooltip: { followCursor: true, theme: theme.palette.mode },
       xaxis: {
         axisBorder: { show: false },
         axisTicks: { color: theme.palette.divider },
         labels: { style: { colors: theme.palette.text.secondary } },
-        tooltip: { enabled: false },
+        categories: hourLabels,
       },
       yaxis: {
-        labels: {
-          style: { colors: theme.palette.text.secondary },
-          formatter: (val) =>
-            Number(val).toLocaleString(undefined, {
-              maximumFractionDigits: 0,
-            }),
-        },
+        labels: { style: { colors: theme.palette.text.secondary } },
+        title: { text: "Total Net (kg)" },
       },
     }),
-    [theme, chartLabels]
+    [theme, hourLabels]
   );
+  const [chartSeries, setChartSeries] = React.useState<any[]>([
+    { name: "Total Net (kg)", data: [] as number[] },
+  ]);
+  const [chartLoading, setChartLoading] = React.useState(false);
 
-  const loadChart = React.useCallback(async () => {
+  /* ---------- คำนวณช่วงวันจาก tab ---------- */
+  const rangeDays = React.useMemo(() => {
+    if (!dateFrom) return [dayjs()];
+    if (tab === 0) {
+      return [dateFrom.startOf("day")];
+    }
+    if (tab === 1) {
+      const start = dateFrom.startOf("week").add(1, "day"); // จันทร์
+      return _.range(0, 7).map((i) => start.add(i, "day"));
+    }
+    // Month/Range
+    const start = (dateFrom ?? dayjs()).startOf("day");
+    const end = (dateTo ?? start.endOf("month")).endOf("day");
+    const all: Dayjs[] = [];
+    let cur = start.startOf("day");
+    const last = end.startOf("day");
+    while (cur.isBefore(last) || cur.isSame(last, "day")) {
+      all.push(cur);
+      cur = cur.add(1, "day");
+    }
+    return all;
+  }, [tab, dateFrom, dateTo]);
+
+  /* ---------- โหลดข้อมูล ---------- */
+  const loadData = React.useCallback(async () => {
+    setLoading(true);
     try {
-      setChartLoading(true);
-
-      if (chartTab === 0) {
-        // ใช้ข้อมูลรายวัน (หลัง filter แล้ว)
-        const dayRows = rowsDay;
-        setChartLabels(hourLabels);
-        setChartSeries([
-          { name: "In (kg)", type: "column", data: sumByHour(dayRows, "in") },
-          { name: "Out (kg)", type: "column", data: sumByHour(dayRows, "out") },
-        ]);
-      } else {
-        // รายสัปดาห์
-        const countsIn = Array(7).fill(0);
-        const countsOut = Array(7).fill(0);
-        for (const r of rowsWeek) {
-          if (!r.checkInTime) continue;
-          const idx = dayIndexMonSun(dayjs(r.checkInTime));
-          countsIn[idx] += weightInTotal(r);
-          countsOut[idx] += weightOutTotal(r);
-        }
-        setChartLabels(labelsMonSun());
-        setChartSeries([
-          { name: "In (kg)", type: "column", data: countsIn },
-          { name: "Out (kg)", type: "column", data: countsOut },
-        ]);
+      // ยิงหลายวันแล้วรวม
+      const allRows: BookingView[] = [];
+      for (const d of rangeDays) {
+        const ev = await fetchJSON<any[]>(EVENTS_API(d.format("YYYY-MM-DD")));
+        allRows.push(...(ev || []).map(normalizeFromEvent));
       }
+
+      // ค้นหา
+      const term = q.trim().toLowerCase();
+      const filtered = term
+        ? allRows.filter(
+            (r) =>
+              r.bookingCode?.toLowerCase().includes(term) ||
+              r.supplierName?.toLowerCase().includes(term) ||
+              r.supCode?.toLowerCase().includes(term) ||
+              r.truckRegister?.toLowerCase().includes(term)
+          )
+        : allRows;
+
+      const onlyChecked = filtered
+        .filter((r) => !!r.checkInTime)
+        .sort((a, b) => {
+          const at = a.checkInTime ? +new Date(a.checkInTime) : 0;
+          const bt = b.checkInTime ? +new Date(b.checkInTime) : 0;
+          return bt - at;
+        });
+
+      setRowsAll(filtered);
+      setRowsCheckedIn(onlyChecked);
+      setPage(0);
+
+      // Summary
+      const inProgress = onlyChecked.filter((r) => {
+        const done = isTrailer(r.truckType)
+          ? r.weightOutHead != null || r.weightOutTrailer != null
+          : r.weightOut != null;
+        return !done;
+      }).length;
+
+      setSummary({ totalBookings: filtered.length, inProgress });
+    } catch (e: any) {
+      setToast({
+        open: true,
+        msg: e?.message || "โหลดข้อมูลไม่สำเร็จ",
+        sev: "error",
+      });
+      setRowsAll([]);
+      setRowsCheckedIn([]);
+      setSummary({ totalBookings: 0, inProgress: 0 });
+    } finally {
+      setLoading(false);
+    }
+  }, [rangeDays, q]);
+
+  React.useEffect(() => {
+    const t = setTimeout(loadData, 150);
+    return () => clearTimeout(t);
+  }, [loadData]);
+
+  /* ---------- โหลดกราฟ (Bar) ตามช่วงชั่วโมง ---------- */
+  const loadChart = React.useCallback(async () => {
+    setChartLoading(true);
+    try {
+      const len = Math.max(0, hEnd - hStart + 1);
+      const vals = Array(len).fill(0);
+      for (const r of rowsAll) {
+        if (!r.checkInTime) continue;
+        const h = dayjs(r.checkInTime).hour();
+        if (h < hStart || h > hEnd) continue;
+        const net = calcNetShown(r);
+        if (net == null) continue; // ยังไม่ออก
+        vals[h - hStart] += net;
+      }
+      setChartSeries([{ name: "Total Net (kg)", data: vals }]);
     } finally {
       setChartLoading(false);
     }
-  }, [chartTab, rowsDay, rowsWeek, hourLabels]);
+  }, [rowsAll, hStart, hEnd]);
 
   React.useEffect(() => {
     loadChart();
   }, [loadChart]);
 
-  /* ---------- ตาราง: เลือกชุดตามแท็บ ---------- */
-  const tableRows = chartTab === 0 ? rowsDay : rowsWeek;
+  /* ---------- สรุปตามประเภทยาง ---------- */
+  const rubberSummary = React.useMemo(() => {
+    // เฉพาะรายการที่มี Net แล้ว
+    const done = rowsAll.filter((r) => calcNetShown(r) != null);
+    const byType = _.groupBy(done, (r) => r.rubberTypeName || "Unknown");
+    const items = Object.entries(byType).map(([name, list]) => {
+      const sum = list.reduce((acc, it) => acc + (calcNetShown(it) || 0), 0);
+      return { name, kg: sum };
+    });
+    const total = items.reduce((a, b) => a + b.kg, 0);
+    return {
+      total,
+      items: items
+        .sort((a, b) => b.kg - a.kg)
+        .map((it) => ({
+          ...it,
+          pct: total ? Math.round((it.kg / total) * 100) : 0,
+        })),
+    };
+  }, [rowsAll]);
 
+  /* ---------- ตาราง + เพจิ้ง ---------- */
+  const tableRows = rowsCheckedIn; // โชว์เฉพาะที่เช็คอินแล้ว
   const paged = React.useMemo(() => {
     const start = page * rowsPerPage;
     return tableRows.slice(start, start + rowsPerPage);
   }, [tableRows, page, rowsPerPage]);
+
+  /* ---------- helpers UI ---------- */
+  const hourOptions = React.useMemo(
+    () =>
+      Array.from({ length: 24 }, (_, h) => ({
+        label: `${String(h).padStart(2, "0")}:00`,
+        value: h,
+      })),
+    []
+  );
 
   /* ---------- UI ---------- */
   return (
@@ -524,15 +447,14 @@ export default function CheckInHistoryPage() {
           <Box className="p-6">
             <Stack direction="row" alignItems="center" spacing={1}>
               <Typography variant="h5" fontWeight={800}>
-                In/Out Weight Dashboard
+                Rubber Receiving Dashboard
               </Typography>
               <Box sx={{ flexGrow: 1 }} />
               <IconButton
-                onClick={() =>
-                  chartTab === 1
-                    ? (loadWeek(), loadChart())
-                    : (loadDay(), loadChart())
-                }
+                onClick={() => {
+                  loadData();
+                  loadChart();
+                }}
                 disabled={loading}
                 title="Refresh"
               >
@@ -543,73 +465,75 @@ export default function CheckInHistoryPage() {
         }
         content={
           <Box className="p-6">
-            {/* Filters */}
-            <Paper variant="outlined" sx={{ p: 2, borderRadius: 1, mb: 2 }}>
+            {/* ===== Overview (ย้ายแถบควบคุมลงมาอยู่ด้านใน) ===== */}
+            <Paper
+              sx={{ p: 2.5, borderRadius: RADIUS, mb: 2 }}
+              variant="outlined"
+            >
+              {/* แถบควบคุมด้านบนของ Overview */}
               <Stack
                 direction={{ xs: "column", md: "row" }}
                 spacing={1.25}
-                alignItems="flex-end"
+                alignItems={{ xs: "stretch", md: "center" }}
               >
-                <FormControl sx={{ flex: 1 }}>
-                  <FormLabel>Date</FormLabel>
-                  <DatePicker
-                    value={date}
-                    onChange={(v: Dayjs | null) => setDate(v)}
-                    format="DD-MMM-YYYY"
-                    slotProps={{
-                      textField: {
-                        size: "small",
-                        sx: { "& .MuiOutlinedInput-root": { borderRadius: 1 } },
-                      },
-                      popper: { disablePortal: true },
-                    }}
-                  />
-                </FormControl>
-
-                <FormControl sx={{ flex: 1 }}>
-                  <FormLabel>Time Range</FormLabel>
-                  <TextField
-                    {...FIELD_PROPS}
-                    sx={fieldSx}
-                    select
-                    value={timePreset}
-                    onChange={(e) =>
-                      setTimePreset(e.target.value as TimePreset)
+                <Tabs
+                  value={tab}
+                  onChange={(_e, v: TabKey) => {
+                    setTab(v);
+                    if (v === 0) {
+                      setDateTo(dateFrom); // Day ใช้วันเดียว
+                    } else if (v === 1) {
+                      setDateTo(dateFrom); // Week ใช้ From ตัวเดียวเป็นสัปดาห์เดียวกัน
+                    } else if (v === 2) {
+                      const base = dateFrom ?? dayjs();
+                      setDateFrom(base.startOf("month"));
+                      setDateTo(base.endOf("month"));
                     }
-                  >
-                    <MenuItem value="all">ทั้งวัน (00:00–23:59)</MenuItem>
-                    <MenuItem value="am">ช่วงเช้า (08:00–12:00)</MenuItem>
-                    <MenuItem value="pm">ช่วงบ่าย (12:00–17:00)</MenuItem>
-                    <MenuItem value="custom">กำหนดเอง</MenuItem>
-                  </TextField>
-                </FormControl>
+                  }}
+                  sx={{ minHeight: 40 }}
+                >
+                  <Tab label="This Day" value={0} />
+                  <Tab label="This Week" value={1} />
+                  <Tab label="This Month" value={2} />
+                </Tabs>
 
-                {timePreset === "custom" && (
-                  <>
-                    <FormControl sx={{ width: 140 }}>
-                      <FormLabel>Start</FormLabel>
-                      <TextField
-                        {...FIELD_PROPS}
-                        sx={fieldSx}
-                        value={customStart}
-                        onChange={(e) => setCustomStart(e.target.value)}
-                        placeholder="HH:mm"
-                      />
-                    </FormControl>
-                    <FormControl sx={{ width: 140 }}>
-                      <FormLabel>End</FormLabel>
-                      <TextField
-                        {...FIELD_PROPS}
-                        sx={fieldSx}
-                        value={customEnd}
-                        onChange={(e) => setCustomEnd(e.target.value)}
-                        placeholder="HH:mm"
-                      />
-                    </FormControl>
-                  </>
-                )}
+                <Box sx={{ flexGrow: 1 }} />
 
-                <FormControl sx={{ flex: 2 }}>
+                {/* From / To */}
+                <Stack direction="row" spacing={1}>
+                  <FormControl sx={{ width: 160 }}>
+                    <FormLabel>From</FormLabel>
+                    <DatePicker
+                      value={dateFrom}
+                      onChange={(v: Dayjs | null) => setDateFrom(v)}
+                      format="DD-MMM-YYYY"
+                      slotProps={{
+                        textField: { size: "small", sx: fieldSx },
+                        popper: { disablePortal: true },
+                      }}
+                    />
+                  </FormControl>
+
+                  <FormControl sx={{ width: 160 }}>
+                    <FormLabel>To</FormLabel>
+                    <DatePicker
+                      value={tab === 2 ? dateTo : dateFrom}
+                      onChange={(v: Dayjs | null) => {
+                        if (tab === 2) setDateTo(v);
+                        else setDateFrom(v);
+                      }}
+                      disabled={tab !== 2}
+                      format="DD-MMM-YYYY"
+                      slotProps={{
+                        textField: { size: "small", sx: fieldSx },
+                        popper: { disablePortal: true },
+                      }}
+                    />
+                  </FormControl>
+                </Stack>
+
+                {/* Search */}
+                <FormControl sx={{ minWidth: 260, flex: 1 }}>
                   <FormLabel>Search (Code / Supplier / Plate)</FormLabel>
                   <TextField
                     {...FIELD_PROPS}
@@ -624,55 +548,104 @@ export default function CheckInHistoryPage() {
                         </InputAdornment>
                       ),
                     }}
+                    onKeyDown={(e) => e.key === "Enter" && loadData()}
                   />
                 </FormControl>
-
-                <Box sx={{ flex: 1 }}>
-                  <Button
-                    fullWidth
-                    variant="outlined"
-                    onClick={() =>
-                      chartTab === 1
-                        ? (loadWeek(), loadChart())
-                        : (loadDay(), loadChart())
-                    }
-                    disabled={loading}
-                    sx={{ borderRadius: 1, height: 33 }}
-                  >
-                    {loading ? "Loading..." : "Load data"}
-                  </Button>
-                </Box>
               </Stack>
-            </Paper>
 
-            {/* ===== Chart + Overview ===== */}
-            <Paper
-              sx={{ p: 2.5, borderRadius: RADIUS, mb: 2 }}
-              variant="outlined"
-            >
-              <div className="flex flex-col items-start justify-between sm:flex-row">
-                <Typography className="truncate text-xl leading-6 font-medium tracking-tight">
-                  Weights Summary
-                </Typography>
-                <div className="mt-3 sm:mt-0">
-                  <Tabs
-                    value={chartTab}
-                    onChange={(_e, v: 0 | 1) => setChartTab(v)}
+              {/* Cards */}
+              <Box className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-4">
+                <Box
+                  className="flex flex-col items-center justify-center rounded-xl border px-1 py-8"
+                  sx={{
+                    backgroundColor: "var(--mui-palette-background-default)",
+                  }}
+                >
+                  <Typography
+                    className="text-5xl leading-none font-semibold tracking-tight sm:text-6xl"
+                    color="primary"
                   >
-                    <Tab label="This Day" value={0} />
-                    <Tab label="This Week" value={1} />
-                  </Tabs>
-                </div>
-              </div>
+                    {summary.totalBookings.toLocaleString()}
+                  </Typography>
+                  <Typography
+                    className="mt-1 text-sm sm:text-base"
+                    color="text.secondary"
+                  >
+                    {tab === 0
+                      ? "Bookings (Today)"
+                      : tab === 1
+                        ? "Bookings (This Week)"
+                        : "Bookings (Range)"}
+                  </Typography>
+                </Box>
+
+                <Box
+                  className="flex flex-col items-center justify-center rounded-xl border px-1 py-8"
+                  sx={{
+                    backgroundColor: "var(--mui-palette-background-default)",
+                  }}
+                >
+                  <Typography
+                    className="text-5xl leading-none font-semibold tracking-tight sm:text-6xl"
+                    color="secondary"
+                  >
+                    {summary.inProgress.toLocaleString()}
+                  </Typography>
+                  <Typography
+                    className="mt-1 text-sm sm:text-base"
+                    color="text.secondary"
+                  >
+                    In Progress
+                  </Typography>
+                </Box>
+              </Box>
 
               <div className="mt-4 grid w-full grid-flow-row grid-cols-1 gap-6 lg:grid-cols-2">
-                {/* Left: chart */}
+                {/* Left: BAR chart + hour range controls */}
                 <div className="flex flex-auto flex-col">
-                  <Typography className="font-medium" color="text.secondary">
-                    {chartTab === 0
-                      ? "Sum of In/Out by hour (08:00–20:00)"
-                      : "Sum of In/Out per day (Mon–Sun)"}
-                  </Typography>
+                  <Stack
+                    direction="row"
+                    alignItems="center"
+                    justifyContent="space-between"
+                    mb={1}
+                  >
+                    <Typography className="font-medium" color="text.secondary">
+                      Total Net by hour (abs(Out − In))
+                    </Typography>
+                    {/* ตัวเลือกช่วงชั่วโมงของกราฟ */}
+                    <Stack direction="row" spacing={1} alignItems="center">
+                      <Typography variant="caption" color="text.secondary">
+                        Hour Range
+                      </Typography>
+                      <Select
+                        size="small"
+                        value={hStart}
+                        onChange={(e) => setHStart(Number(e.target.value))}
+                      >
+                        {hourOptions.map((o) => (
+                          <MenuItem key={`hs-${o.value}`} value={o.value}>
+                            {o.label}
+                          </MenuItem>
+                        ))}
+                      </Select>
+                      <Typography variant="caption">to</Typography>
+                      <Select
+                        size="small"
+                        value={hEnd}
+                        onChange={(e) => setHEnd(Number(e.target.value))}
+                      >
+                        {hourOptions.map((o) => (
+                          <MenuItem
+                            key={`he-${o.value}`}
+                            value={o.value}
+                            disabled={o.value < hStart}
+                          >
+                            {o.label}
+                          </MenuItem>
+                        ))}
+                      </Select>
+                    </Stack>
+                  </Stack>
 
                   <div className="flex flex-auto flex-col">
                     {chartLoading ? (
@@ -688,6 +661,7 @@ export default function CheckInHistoryPage() {
                           className="w-full flex-auto"
                           options={chartOptions}
                           series={chartSeries}
+                          type="bar"
                           height={320}
                         />
                       </motion.div>
@@ -695,143 +669,85 @@ export default function CheckInHistoryPage() {
                   </div>
                 </div>
 
-                {/* Right: overview cards */}
+                {/* Right: Rubber type summary */}
                 <div className="flex flex-col">
                   <Typography className="font-medium" color="text.secondary">
-                    Overview
+                    Rubber Types (weight & share)
                   </Typography>
-                  <div className="mt-6 grid flex-auto grid-cols-4 gap-3">
-                    {/* กล่องน้ำหนักรวมเข้า */}
-                    <Box
-                      className="col-span-2 flex flex-col items-center justify-center rounded-xl border px-1 py-8"
-                      sx={{
-                        backgroundColor:
-                          "var(--mui-palette-background-default)",
-                      }}
-                    >
-                      <Typography
-                        className="text-4xl leading-none font-semibold tracking-tight sm:text-6xl"
-                        color="secondary"
-                      >
-                        {summary.totalInKg.toLocaleString()}
-                      </Typography>
-                      <Typography
-                        className="mt-1 text-sm font-medium sm:text-lg"
-                        color="secondary"
-                      >
-                        Total In (kg)
-                      </Typography>
-                    </Box>
 
-                    {/* กล่องน้ำหนักรวมออก */}
-                    <Box
-                      className="col-span-2 flex flex-col items-center justify-center rounded-xl border px-1 py-8"
-                      sx={{
-                        backgroundColor:
-                          "var(--mui-palette-background-default)",
-                      }}
-                    >
-                      <Typography
-                        className="text-4xl leading-none font-semibold tracking-tight sm:text-6xl"
-                        color="secondary"
-                      >
-                        {summary.totalOutKg.toLocaleString()}
+                  <Paper
+                    variant="outlined"
+                    sx={{ mt: 2, p: 2, borderRadius: RADIUS }}
+                  >
+                    {rubberSummary.items.length === 0 ? (
+                      <Typography color="text.secondary">
+                        No completed records.
                       </Typography>
-                      <Typography
-                        className="mt-1 text-sm font-medium sm:text-lg"
-                        color="secondary"
-                      >
-                        Total Out (kg)
-                      </Typography>
-                    </Box>
-
-                    {/* กล่อง Net */}
-                    <Box
-                      className="col-span-2 sm:col-span-1 flex flex-col items-center justify-center rounded-xl border px-1 py-8"
-                      sx={{
-                        backgroundColor:
-                          "var(--mui-palette-background-default)",
-                      }}
-                    >
-                      <Typography className="text-4xl leading-none font-semibold tracking-tight">
-                        {summary.netKg.toLocaleString()}
-                      </Typography>
-                      <Typography
-                        className="mt-1 text-center text-sm font-medium"
-                        color="text.secondary"
-                      >
-                        Net (Out - In)
-                      </Typography>
-                    </Box>
-
-                    {/* กล่อง Checked-in vehicles */}
-                    <Box
-                      className="col-span-2 sm:col-span-1 flex flex-col items-center justify-center rounded-xl border px-1 py-8"
-                      sx={{
-                        backgroundColor:
-                          "var(--mui-palette-background-default)",
-                      }}
-                    >
-                      <Typography className="text-4xl leading-none font-semibold tracking-tight">
-                        {summary.checkedIn}
-                      </Typography>
-                      <Typography
-                        className="mt-1 text-center text-sm font-medium"
-                        color="text.secondary"
-                      >
-                        Checked-in
-                      </Typography>
-                    </Box>
-
-                    {/* กล่อง Completed (Out) vehicles */}
-                    <Box
-                      className="col-span-2 sm:col-span-1 flex flex-col items-center justify-center rounded-xl border px-1 py-8"
-                      sx={{
-                        backgroundColor:
-                          "var(--mui-palette-background-default)",
-                      }}
-                    >
-                      <Typography className="text-4xl leading-none font-semibold tracking-tight">
-                        {summary.completedOut}
-                      </Typography>
-                      <Typography
-                        className="mt-1 text-center text-sm font-medium"
-                        color="text.secondary"
-                      >
-                        Completed (Out)
-                      </Typography>
-                    </Box>
-
-                    {/* กล่อง Bookings + % */}
-                    <Box
-                      className="col-span-2 sm:col-span-1 flex flex-col items-center justify-center rounded-xl border px-1 py-8"
-                      sx={{
-                        backgroundColor:
-                          "var(--mui-palette-background-default)",
-                      }}
-                    >
-                      <Typography className="text-4xl leading-none font-semibold tracking-tight">
-                        {summary.totalBookings}
-                      </Typography>
-                      <Typography
-                        className="mt-1 text-center text-sm font-medium"
-                        color="text.secondary"
-                      >
-                        Bookings · {summary.completion}%
-                      </Typography>
-                    </Box>
-                  </div>
+                    ) : (
+                      <Stack spacing={1.25}>
+                        {rubberSummary.items.map((it) => (
+                          <Box key={it.name}>
+                            <Stack
+                              direction="row"
+                              justifyContent="space-between"
+                              mb={0.5}
+                            >
+                              <Stack
+                                direction="row"
+                                spacing={1}
+                                alignItems="center"
+                              >
+                                <Chip
+                                  size="small"
+                                  label={it.name}
+                                  sx={rubberChipSx(it.name)}
+                                />
+                                <Typography
+                                  variant="body2"
+                                  color="text.secondary"
+                                >
+                                  {it.kg.toLocaleString()} kg
+                                </Typography>
+                              </Stack>
+                              <Typography
+                                variant="body2"
+                                color="text.secondary"
+                              >
+                                {it.pct}%
+                              </Typography>
+                            </Stack>
+                            <LinearProgress
+                              variant="determinate"
+                              value={it.pct}
+                              sx={{ height: 8, borderRadius: 999 }}
+                            />
+                          </Box>
+                        ))}
+                        <Stack
+                          direction="row"
+                          justifyContent="space-between"
+                          pt={0.5}
+                        >
+                          <Typography fontWeight={700}>Total</Typography>
+                          <Typography fontWeight={700}>
+                            {rubberSummary.total.toLocaleString()} kg
+                          </Typography>
+                        </Stack>
+                      </Stack>
+                    )}
+                  </Paper>
                 </div>
               </div>
             </Paper>
 
             {/* หมายเหตุ */}
             <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-              แสดงผลตามช่วงเวลา/คำค้นที่เลือก • รวม{" "}
-              {summary.totalBookings.toLocaleString()} รายการ
+              แสดงเฉพาะรายการที่<strong>เช็คอินแล้ว</strong>{" "}
+              {rowsCheckedIn.length} รายการ จากทั้งหมด {summary.totalBookings}{" "}
+              รายการในช่วงที่เลือก
             </Typography>
 
-            {/* ตารางสรุปตามแท็บ */}
+            {/* ตาราง */}
             <Paper variant="outlined" sx={{ borderRadius: RADIUS }}>
               <TableContainer>
                 <Table size="small" stickyHeader>
@@ -867,21 +783,21 @@ export default function CheckInHistoryPage() {
                         ? r.weightOutHead != null || r.weightOutTrailer != null
                         : r.weightOut != null;
 
-                      const hasIn =
-                        r.weightIn != null ||
-                        r.weightInHead != null ||
-                        r.weightInTrailer != null;
+                      const netShown = calcNetShown(r);
 
-                      const net = calcNet(r);
                       const statusColor = alreadyOut
                         ? "success"
-                        : hasIn
+                        : r.weightIn != null ||
+                            r.weightInHead != null ||
+                            r.weightInTrailer != null
                           ? "warning"
                           : "default";
                       const statusText = alreadyOut
-                        ? "ออกแล้ว"
-                        : hasIn
-                          ? "เข้าแล้ว"
+                        ? "บันทึกออกแล้ว"
+                        : r.weightIn != null ||
+                            r.weightInHead != null ||
+                            r.weightInTrailer != null
+                          ? "บันทึกเข้าแล้ว"
                           : "-";
 
                       return (
@@ -946,7 +862,7 @@ export default function CheckInHistoryPage() {
                           <TableCell align="right">{showIn(r)}</TableCell>
                           <TableCell align="right">{showOut(r)}</TableCell>
                           <TableCell align="right">
-                            {net == null ? "-" : net.toLocaleString()}
+                            {netShown == null ? "-" : netShown.toLocaleString()}
                           </TableCell>
 
                           <TableCell align="center">
