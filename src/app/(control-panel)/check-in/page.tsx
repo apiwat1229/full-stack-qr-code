@@ -620,8 +620,47 @@ export default function CheckInPage() {
     };
   }, [status, callApi]);
 
+  const resetForm = React.useCallback(() => {
+    // ยกเลิกคำขอ fetch ที่ค้างอยู่
+    if (fetchAbortRef.current) {
+      fetchAbortRef.current.abort();
+      fetchAbortRef.current = null;
+    }
+    // ล้างสถานะฟอร์ม
+    setResult(null);
+    setLicensePlate("");
+    setLoading(false);
+    lastSearchedRef.current = ""; // กัน auto-search ซ้ำเมื่อเริ่มพิมพ์ใหม่
+  }, []);
+
   /* check-in pane state */
   const [bookCode, setBookCode] = React.useState("");
+  const normalize = (s: string) => s.replace(/\D/g, "").slice(0, 10);
+
+  const lastSearchedRef = React.useRef<string>("");
+  const debounceRef = React.useRef<number | null>(null);
+  const fetchAbortRef = React.useRef<AbortController | null>(null);
+
+  React.useEffect(() => {
+    // ยิงค้นหาอัตโนมัติเมื่อครบ 10 ตัว และไม่ซ้ำกับตัวล่าสุด
+    if (bookCode.length === 10 && bookCode !== lastSearchedRef.current) {
+      if (debounceRef.current) window.clearTimeout(debounceRef.current);
+      debounceRef.current = window.setTimeout(() => {
+        lastSearchedRef.current = bookCode;
+        handleSearch();
+      }, 300);
+    }
+    // ถ้าน้อยกว่า 10 ให้เคลียร์ debounce
+    return () => {
+      if (debounceRef.current) window.clearTimeout(debounceRef.current);
+    };
+  }, [bookCode]); // <-- อย่าลืม dependency
+
+  // ใช้เมื่อได้ค่าจาก QR/สแกนเนอร์
+  const applyScannedCode = (raw: string) => {
+    setBookCode(normalize(raw));
+  };
+
   const [loading, setLoading] = React.useState(false);
   const [globalLoading, setGlobalLoading] = React.useState(false);
   const [result, setResult] = React.useState<BookingView | null>(null);
@@ -698,13 +737,27 @@ export default function CheckInPage() {
   /* ===== Search / Check-in ===== */
   const handleSearch = async () => {
     const code = bookCode.trim();
-    if (!code) {
-      setToast({ open: true, msg: "กรุณากรอก Booking Code", sev: "error" });
+
+    // เงื่อนไข: ต้องครบ 10 หลักเท่านั้น
+    if (code.length !== 10) {
+      setToast({ open: true, msg: "รหัสต้องมี 10 หลัก", sev: "error" });
       return;
     }
+
+    // ยกเลิกคำขอก่อนหน้า หากยังไม่เสร็จ
+    if (fetchAbortRef.current) {
+      fetchAbortRef.current.abort();
+    }
+    const ctrl = new AbortController();
+    fetchAbortRef.current = ctrl;
+
     setLoading(true);
     try {
-      const data = await callApi<any>(LOOKUP_BOOKING_API(code));
+      // ส่ง signal เข้าไปใน fetch (callApi → fetchJSON → fetch)
+      const data = await callApi<any>(LOOKUP_BOOKING_API(code), {
+        signal: ctrl.signal,
+      });
+
       const view = normalizeFromEvent({
         ...data,
         id: data.id ?? data._id ?? data.booking_code ?? code,
@@ -722,9 +775,11 @@ export default function CheckInPage() {
           check_in_time: data.checkInTime ?? data.check_in_time,
         },
       });
+
       setResult(view);
       setLicensePlate(view.truckRegister || "");
     } catch (e: any) {
+      if (e?.name === "AbortError") return; // ถูกยกเลิก — ไม่ต้องแจ้ง error
       setResult(null);
       const msg = String(e?.message || "");
       setToast({
@@ -861,9 +916,26 @@ export default function CheckInPage() {
                     {...FIELD_PROPS}
                     sx={fieldSx}
                     value={bookCode}
-                    onChange={(e) => setBookCode(e.target.value)}
-                    placeholder="เช่น 2409010800-01"
-                    onKeyDown={(e) => e.key === "Enter" && handleSearch()}
+                    onChange={(e) => {
+                      const v = normalize(e.target.value);
+                      setBookCode(v);
+                      if (v === "") resetForm(); // ← ล้างฟอร์มเมื่อช่องว่าง
+                    }}
+                    onPaste={(e) => {
+                      // จัดรูปทันทีตอนวาง
+                      const pasted = e.clipboardData?.getData("text") ?? "";
+                      e.preventDefault(); // กันไม่ให้ค่าดิบเด้งก่อน normalize
+                      const v = normalize((bookCode || "") + pasted);
+                      setBookCode(v);
+                      if (v === "") resetForm(); // ← วางแล้วว่าง ก็ล้างฟอร์ม
+                    }}
+                    placeholder="เช่น 2409010800"
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && bookCode.length === 10) {
+                        handleSearch();
+                      }
+                    }}
+                    inputProps={{ inputMode: "numeric", pattern: "\\d*" }}
                     InputProps={{
                       startAdornment: (
                         <InputAdornment position="start">
@@ -876,8 +948,11 @@ export default function CheckInPage() {
                             edge="end"
                             size="small"
                             aria-label="scan-qr"
-                            disabled
-                            title="เร็วๆ นี้: สแกน QR"
+                            onClick={() => {
+                              // ตัวอย่าง: ได้ค่าจากเครื่องสแกน
+                              const scanned = "2409010800";
+                              applyScannedCode(scanned); // ← จะ normalize และล้างถ้าว่าง
+                            }}
                           >
                             <QrCodeScannerIcon fontSize="small" />
                           </IconButton>
@@ -911,9 +986,8 @@ export default function CheckInPage() {
                     variant="outlined"
                     color="inherit"
                     onClick={() => {
-                      setBookCode("");
-                      setResult(null);
-                      setLicensePlate("");
+                      setBookCode(""); // ล้างช่องกรอก
+                      resetForm(); // ← ยกเลิก fetch ค้าง + เคลียร์ result, licensePlate, loading
                     }}
                     startIcon={<ReplayIcon />}
                     disabled={loading}
