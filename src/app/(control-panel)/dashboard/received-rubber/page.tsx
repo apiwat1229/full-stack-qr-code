@@ -56,7 +56,7 @@ const RADIUS = 1;
 const FIELD_PROPS = { size: "small", variant: "outlined" } as const;
 const fieldSx = { "& .MuiOutlinedInput-root": { borderRadius: 1 } };
 
-// ช่วงเวลา 08:00–20:00
+// ช่วงเวลา 08:00–20:00 (สำหรับกราฟแบบรายชั่วโมง)
 const H_START = 8;
 const H_END = 20; // inclusive
 const H_LEN = H_END - H_START + 1;
@@ -76,6 +76,14 @@ type BookingView = {
   rubberTypeName?: string;
   recorder?: string;
   checkInTime?: string | null;
+
+  // น้ำหนัก
+  weightIn?: number | null;
+  weightInHead?: number | null;
+  weightInTrailer?: number | null;
+  weightOut?: number | null;
+  weightOutHead?: number | null;
+  weightOutTrailer?: number | null;
 };
 
 type TimePreset = "all" | "am" | "pm" | "custom";
@@ -83,23 +91,50 @@ type TimePreset = "all" | "am" | "pm" | "custom";
 type Summary = {
   totalBookings: number;
   checkedIn: number;
-  pending: number;
+  completedOut: number;
   uniqueSupAll: number;
-  uniqueSupChecked: number;
-  completion: number; // %
+  completion: number; // % checked-in / total
+  totalInKg: number; // ผลรวมน้ำหนักเข้า
+  totalOutKg: number; // ผลรวมน้ำหนักออก
+  netKg: number; // out - in
 };
 
-/* ================= Helpers ================= */
-async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, {
-    cache: "no-store",
-    credentials: "include",
-    ...init,
-  });
-  const txt = await res.text().catch(() => "");
-  if (!res.ok) throw new Error(txt || `HTTP ${res.status}`);
-  return txt ? (JSON.parse(txt) as T) : ({} as T);
-}
+// ===== Helpers =====
+const fmtKg = (n?: number | null) =>
+  n == null ? "-" : n.toLocaleString(undefined, { maximumFractionDigits: 0 });
+
+const isTrailer = (truckType?: string) =>
+  (truckType || "").toLowerCase().includes("พ่วง") ||
+  (truckType || "").toLowerCase().includes("trailer");
+
+const weightInTotal = (r: BookingView) =>
+  isTrailer(r.truckType)
+    ? (r.weightInHead ?? 0) + (r.weightInTrailer ?? 0)
+    : (r.weightIn ?? 0);
+
+const weightOutTotal = (r: BookingView) =>
+  isTrailer(r.truckType)
+    ? (r.weightOutHead ?? 0) + (r.weightOutTrailer ?? 0)
+    : (r.weightOut ?? 0);
+
+// แสดงผล In/Out สำหรับรถพ่วงเป็น "หัว / หาง"
+const showIn = (r: BookingView) =>
+  isTrailer(r.truckType)
+    ? `${fmtKg(r.weightInHead)} / ${fmtKg(r.weightInTrailer)}`
+    : fmtKg(r.weightIn);
+
+const showOut = (r: BookingView) =>
+  isTrailer(r.truckType)
+    ? `${fmtKg(r.weightOutHead)} / ${fmtKg(r.weightOutTrailer)}`
+    : fmtKg(r.weightOut);
+
+const calcNet = (r: BookingView): number | null => {
+  const outAny = isTrailer(r.truckType)
+    ? r.weightOutHead != null || r.weightOutTrailer != null
+    : r.weightOut != null;
+  if (!outAny) return null;
+  return weightOutTotal(r) - weightInTotal(r);
+};
 
 function rubberChipSx(name?: string) {
   const n = (name || "").toLowerCase();
@@ -120,6 +155,18 @@ function joinSupplierName(xp: any, raw: any) {
   return `${xp?.title ?? ""}${xp?.firstName ?? raw?.firstName ?? ""} ${xp?.lastName ?? raw?.lastName ?? ""}`.trim();
 }
 
+async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(url, {
+    cache: "no-store",
+    credentials: "include",
+    ...init,
+  });
+  const txt = await res.text().catch(() => "");
+  if (!res.ok) throw new Error(txt || `HTTP ${res.status}`);
+  return txt ? (JSON.parse(txt) as T) : ({} as T);
+}
+
+/** map event -> BookingView (รองรับ extendedProps จาก backend) */
 function normalizeFromEvent(raw: any): BookingView {
   const xp = raw?.extendedProps ?? {};
   return {
@@ -144,6 +191,14 @@ function normalizeFromEvent(raw: any): BookingView {
     rubberTypeName: xp.rubber_type_name ?? xp.rubber_type ?? "",
     recorder: xp.recorded_by ?? "",
     checkInTime: xp.check_in_time ?? null,
+
+    // น้ำหนัก
+    weightIn: xp.weight_in ?? null,
+    weightInHead: xp.weight_in_head ?? null,
+    weightInTrailer: xp.weight_in_trailer ?? null,
+    weightOut: xp.weight_out ?? null,
+    weightOutHead: xp.weight_out_head ?? null,
+    weightOutTrailer: xp.weight_out_trailer ?? null,
   };
 }
 
@@ -158,15 +213,10 @@ export default function CheckInHistoryPage() {
   const [customEnd, setCustomEnd] = React.useState("17:00");
   const [q, setQ] = React.useState("");
 
-  // Data (รายวันสำหรับตารางเดิม)
+  // Data (รายวัน/รายสัปดาห์สำหรับตาราง)
   const [loading, setLoading] = React.useState(false);
-  const [rowsCheckedIn, setRowsCheckedIn] = React.useState<BookingView[]>([]);
-  const [allFiltered, setAllFiltered] = React.useState<BookingView[]>([]);
-
-  // Data (รายสัปดาห์สำหรับตาราง)
-  const [weekRowsCheckedIn, setWeekRowsCheckedIn] = React.useState<
-    BookingView[]
-  >([]);
+  const [rowsDay, setRowsDay] = React.useState<BookingView[]>([]);
+  const [rowsWeek, setRowsWeek] = React.useState<BookingView[]>([]);
 
   const [toast, setToast] = React.useState<{
     open: boolean;
@@ -178,18 +228,20 @@ export default function CheckInHistoryPage() {
   const [page, setPage] = React.useState(0);
   const [rowsPerPage, setRowsPerPage] = React.useState(10);
 
-  // Tabs (Chart mode)
-  const [chartTab, setChartTab] = React.useState<0 | 1>(0); // 0: Day, 1: Week
+  // Tabs (0: Day, 1: Week)
+  const [chartTab, setChartTab] = React.useState<0 | 1>(0);
   const [chartLoading, setChartLoading] = React.useState(false);
 
-  // Summary (ใช้แสดงใน Overview)
+  // Summary
   const [summary, setSummary] = React.useState<Summary>({
     totalBookings: 0,
     checkedIn: 0,
-    pending: 0,
+    completedOut: 0,
     uniqueSupAll: 0,
-    uniqueSupChecked: 0,
     completion: 0,
+    totalInKg: 0,
+    totalOutKg: 0,
+    netKg: 0,
   });
 
   // Derived
@@ -204,90 +256,102 @@ export default function CheckInHistoryPage() {
     return { s: customStart, e: customEnd };
   }, [timePreset, customStart, customEnd]);
 
-  /* ---------- โหลดตาราง: รายวัน ---------- */
-  const load = React.useCallback(async () => {
+  // ---------- utilities ----------
+  function applyTimeAndSearch(rows: BookingView[]) {
+    const inWindow =
+      timePreset === "all"
+        ? rows
+        : rows.filter(
+            (r) =>
+              r.startTime &&
+              r.startTime >= windowRange.s &&
+              r.startTime <= windowRange.e
+          );
+
+    const term = q.trim().toLowerCase();
+    return term
+      ? inWindow.filter(
+          (r) =>
+            r.bookingCode?.toLowerCase().includes(term) ||
+            r.supplierName?.toLowerCase().includes(term) ||
+            r.supCode?.toLowerCase().includes(term) ||
+            r.truckRegister?.toLowerCase().includes(term)
+        )
+      : inWindow;
+  }
+
+  function buildSummary(rows: BookingView[]): Summary {
+    const totalBookings = rows.length;
+    const checkedRows = rows.filter((r) => !!r.checkInTime);
+    const checkedIn = checkedRows.length;
+
+    const completedOut = rows.filter((r) =>
+      isTrailer(r.truckType)
+        ? r.weightOutHead != null || r.weightOutTrailer != null
+        : r.weightOut != null
+    ).length;
+
+    const uniqueSupAll = new Set(
+      rows.map((r) => `${r.supCode}|${r.supplierName}`)
+    ).size;
+
+    const totalInKg = rows.reduce((sum, r) => sum + weightInTotal(r), 0);
+    const totalOutKg = rows.reduce((sum, r) => sum + weightOutTotal(r), 0);
+    const netKg = totalOutKg - totalInKg;
+
+    const completion =
+      totalBookings > 0 ? Math.round((checkedIn / totalBookings) * 100) : 0;
+
+    return {
+      totalBookings,
+      checkedIn,
+      completedOut,
+      uniqueSupAll,
+      completion,
+      totalInKg,
+      totalOutKg,
+      netKg,
+    };
+  }
+
+  /* ---------- โหลดรายวัน ---------- */
+  const loadDay = React.useCallback(async () => {
     setLoading(true);
     try {
       const events = await fetchJSON<any[]>(EVENTS_API(dateISO));
       const all = (events || []).map(normalizeFromEvent);
-
-      const inWindow =
-        timePreset === "all"
-          ? all
-          : all.filter(
-              (r) =>
-                r.startTime &&
-                r.startTime >= windowRange.s &&
-                r.startTime <= windowRange.e
-            );
-
-      const term = q.trim().toLowerCase();
-      const filtered = term
-        ? inWindow.filter(
-            (r) =>
-              r.bookingCode?.toLowerCase().includes(term) ||
-              r.supplierName?.toLowerCase().includes(term) ||
-              r.supCode?.toLowerCase().includes(term) ||
-              r.truckRegister?.toLowerCase().includes(term)
-          )
-        : inWindow;
-
-      const onlyChecked = filtered
-        .filter((r) => !!r.checkInTime)
+      const filtered = applyTimeAndSearch(all)
+        // จัดกลุ่มเวลาเช็คอินใหม่สุดก่อน
         .sort((a, b) => {
           const at = a.checkInTime ? +new Date(a.checkInTime) : 0;
           const bt = b.checkInTime ? +new Date(b.checkInTime) : 0;
           return bt - at;
         });
 
-      setAllFiltered(filtered);
-      setRowsCheckedIn(onlyChecked);
+      setRowsDay(filtered);
       setPage(0);
 
-      // สรุปรายวันสำหรับ Overview เมื่ออยู่แท็บ Day
-      const dayTotal = filtered.length;
-      const dayChecked = onlyChecked.length;
-      const dayUniqueAll = new Set(
-        filtered.map((r) => `${r.supCode}|${r.supplierName}`)
-      ).size;
-      const dayUniqueChecked = new Set(
-        onlyChecked.map((r) => `${r.supCode}|${r.supplierName}`)
-      ).size;
-
-      setSummary({
-        totalBookings: dayTotal,
-        checkedIn: dayChecked,
-        pending: Math.max(0, dayTotal - dayChecked),
-        uniqueSupAll: dayUniqueAll,
-        uniqueSupChecked: dayUniqueChecked,
-        completion: dayTotal ? Math.round((dayChecked / dayTotal) * 100) : 0,
-      });
+      // summary (เฉพาะชุดที่ผ่านตัวกรอง)
+      setSummary(buildSummary(filtered));
     } catch (e: any) {
       setToast({
         open: true,
-        msg: e?.message || "โหลดไม่สำเร็จ",
+        msg: e?.message || "โหลดข้อมูลรายวันไม่สำเร็จ",
         sev: "error",
       });
-      setAllFiltered([]);
-      setRowsCheckedIn([]);
+      setRowsDay([]);
+      setSummary(buildSummary([]));
     } finally {
       setLoading(false);
     }
   }, [dateISO, timePreset, windowRange.s, windowRange.e, q]);
 
-  React.useEffect(() => {
-    const t = setTimeout(() => {
-      if (chartTab === 0) load();
-    }, 200);
-    return () => clearTimeout(t);
-  }, [load, chartTab]);
-
-  /* ---------- โหลดตาราง: รายสัปดาห์ ---------- */
-  const loadWeekTable = React.useCallback(async () => {
+  /* ---------- โหลดรายสัปดาห์ ---------- */
+  const loadWeek = React.useCallback(async () => {
     setLoading(true);
     try {
       const base = dayjs(dateISO);
-      const startOfWeek = base.startOf("week").add(1, "day"); // จันทร์
+      const startOfWeek = base.startOf("week").add(1, "day"); // Mon
       const weekDays = _.range(0, 7).map((i) => startOfWeek.add(i, "day"));
 
       const allRows: BookingView[] = [];
@@ -296,49 +360,39 @@ export default function CheckInHistoryPage() {
         allRows.push(...(ev || []).map(normalizeFromEvent));
       }
 
-      // ค้นหาด้วย q เช่นเดิม
-      const term = q.trim().toLowerCase();
-      const filtered = term
-        ? allRows.filter(
-            (r) =>
-              r.bookingCode?.toLowerCase().includes(term) ||
-              r.supplierName?.toLowerCase().includes(term) ||
-              r.supCode?.toLowerCase().includes(term) ||
-              r.truckRegister?.toLowerCase().includes(term)
-          )
-        : allRows;
+      const filtered = applyTimeAndSearch(allRows).sort((a, b) => {
+        const at = a.checkInTime ? +new Date(a.checkInTime) : 0;
+        const bt = b.checkInTime ? +new Date(b.checkInTime) : 0;
+        return bt - at;
+      });
 
-      const onlyChecked = filtered
-        .filter((r) => !!r.checkInTime)
-        .sort((a, b) => {
-          const at = a.checkInTime ? +new Date(a.checkInTime) : 0;
-          const bt = b.checkInTime ? +new Date(b.checkInTime) : 0;
-          return bt - at;
-        });
-
-      setWeekRowsCheckedIn(onlyChecked);
+      setRowsWeek(filtered);
       setPage(0);
+
+      // summary (สรุปของทั้งสัปดาห์ที่ผ่านตัวกรอง)
+      setSummary(buildSummary(filtered));
     } catch (e: any) {
       setToast({
         open: true,
-        msg: e?.message || "โหลดสัปดาห์ไม่สำเร็จ",
+        msg: e?.message || "โหลดข้อมูลรายสัปดาห์ไม่สำเร็จ",
         sev: "error",
       });
-      setWeekRowsCheckedIn([]);
+      setRowsWeek([]);
+      setSummary(buildSummary([]));
     } finally {
       setLoading(false);
     }
-  }, [dateISO, q]);
+  }, [dateISO, timePreset, windowRange.s, windowRange.e, q]);
 
-  // เมื่อสลับเป็น Week หรือเปลี่ยนวันที่/ค้นหา ให้โหลดตารางสัปดาห์
+  // โหลดตามแท็บ
   React.useEffect(() => {
-    if (chartTab === 1) {
-      const t = setTimeout(loadWeekTable, 200);
-      return () => clearTimeout(t);
-    }
-  }, [chartTab, dateISO, q, loadWeekTable]);
+    const t = setTimeout(() => {
+      chartTab === 0 ? loadDay() : loadWeek();
+    }, 200);
+    return () => clearTimeout(t);
+  }, [chartTab, loadDay, loadWeek]);
 
-  /* ---------- Chart helpers ---------- */
+  /* ---------- Chart ---------- */
   const hourLabels = React.useMemo(
     () =>
       Array.from(
@@ -347,29 +401,29 @@ export default function CheckInHistoryPage() {
       ),
     []
   );
-  function checkedCountByHour(rows: BookingView[]) {
+
+  function sumByHour(rows: BookingView[], mode: "in" | "out") {
     const vals = Array(H_LEN).fill(0);
     for (const r of rows) {
       if (!r.checkInTime) continue;
       const h = dayjs(r.checkInTime).hour();
       if (h < H_START || h > H_END) continue;
-      vals[h - H_START]++;
+      vals[h - H_START] += mode === "in" ? weightInTotal(r) : weightOutTotal(r);
     }
     return vals;
   }
+
   const labelsMonSun = () => ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
   function dayIndexMonSun(d: Dayjs) {
     const js = d.day();
     return js === 0 ? 6 : js - 1;
   }
 
-  /* ---------- Chart state ---------- */
   const [chartLabels, setChartLabels] = React.useState<string[]>(hourLabels);
   const [chartSeries, setChartSeries] = React.useState<any[]>([
-    { name: "Checked-in (line)", type: "line", data: Array(H_LEN).fill(0) },
-    { name: "Checked-in (bar)", type: "column", data: Array(H_LEN).fill(0) },
+    { name: "In (kg)", type: "column", data: Array(H_LEN).fill(0) },
+    { name: "Out (kg)", type: "column", data: Array(H_LEN).fill(0) },
   ]);
-
   const chartOptions: ApexOptions = React.useMemo(
     () => ({
       chart: {
@@ -382,18 +436,22 @@ export default function CheckInHistoryPage() {
       },
       colors: [theme.palette.primary.main, theme.palette.secondary.main],
       labels: chartLabels,
-      dataLabels: {
-        enabled: true,
-        enabledOnSeries: [0],
-        background: { borderWidth: 0 },
-      },
+      dataLabels: { enabled: false },
       grid: { borderColor: theme.palette.divider },
-      legend: { show: false },
-      plotOptions: { bar: { columnWidth: "50%" } },
+      legend: { show: true },
+      plotOptions: { bar: { columnWidth: "55%" } },
       states: { hover: { filter: { type: "darken" } } },
-      stroke: { width: [3, 0], curve: "straight" },
-      markers: { size: 4, strokeWidth: 2, strokeColors: "#fff" },
-      tooltip: { followCursor: true, theme: theme.palette.mode },
+      stroke: { width: [0, 0] },
+      tooltip: {
+        followCursor: true,
+        theme: theme.palette.mode,
+        y: {
+          formatter: (val) =>
+            Number(val).toLocaleString(undefined, {
+              maximumFractionDigits: 0,
+            }) + " kg",
+        },
+      },
       xaxis: {
         axisBorder: { show: false },
         axisTicks: { color: theme.palette.divider },
@@ -401,135 +459,64 @@ export default function CheckInHistoryPage() {
         tooltip: { enabled: false },
       },
       yaxis: {
-        labels: { style: { colors: theme.palette.text.secondary } },
+        labels: {
+          style: { colors: theme.palette.text.secondary },
+          formatter: (val) =>
+            Number(val).toLocaleString(undefined, {
+              maximumFractionDigits: 0,
+            }),
+        },
       },
     }),
     [theme, chartLabels]
   );
 
-  /* ---------- โหลดกราฟ + อัปเดตสรุปสัปดาห์ ---------- */
   const loadChart = React.useCallback(async () => {
     try {
       setChartLoading(true);
 
       if (chartTab === 0) {
-        const events = await fetchJSON<any[]>(EVENTS_API(dateISO));
-        const rows = (events || []).map(normalizeFromEvent);
-        const checked = checkedCountByHour(rows);
-
+        // ใช้ข้อมูลรายวัน (หลัง filter แล้ว)
+        const dayRows = rowsDay;
         setChartLabels(hourLabels);
         setChartSeries([
-          { name: "Checked-in (line)", type: "line", data: checked },
-          { name: "Checked-in (bar)", type: "column", data: checked },
+          { name: "In (kg)", type: "column", data: sumByHour(dayRows, "in") },
+          { name: "Out (kg)", type: "column", data: sumByHour(dayRows, "out") },
         ]);
       } else {
-        const base = dayjs(dateISO);
-        const startOfWeek = base.startOf("week").add(1, "day"); // Mon
-        const weekDays = _.range(0, 7).map((i) => startOfWeek.add(i, "day"));
-
-        const allRows: BookingView[] = [];
-        for (const d of weekDays) {
-          const ev = await fetchJSON<any[]>(EVENTS_API(d.format("YYYY-MM-DD")));
-          allRows.push(...(ev || []).map(normalizeFromEvent));
-        }
-        const counts = Array(7).fill(0);
-        for (const r of allRows) {
+        // รายสัปดาห์
+        const countsIn = Array(7).fill(0);
+        const countsOut = Array(7).fill(0);
+        for (const r of rowsWeek) {
           if (!r.checkInTime) continue;
           const idx = dayIndexMonSun(dayjs(r.checkInTime));
-          counts[idx]++;
+          countsIn[idx] += weightInTotal(r);
+          countsOut[idx] += weightOutTotal(r);
         }
-
         setChartLabels(labelsMonSun());
         setChartSeries([
-          { name: "Checked-in (line)", type: "line", data: counts },
-          { name: "Checked-in (bar)", type: "column", data: counts },
-        ]);
-
-        // สรุปสัปดาห์ (Overview)
-        const weekTotal = allRows.length;
-        const weekCheckedRows = allRows.filter((r) => !!r.checkInTime);
-        const weekChecked = weekCheckedRows.length;
-        const weekUniqueAll = new Set(
-          allRows.map((r) => `${r.supCode}|${r.supplierName}`)
-        ).size;
-        const weekUniqueChecked = new Set(
-          weekCheckedRows.map((r) => `${r.supCode}|${r.supplierName}`)
-        ).size;
-
-        setSummary({
-          totalBookings: weekTotal,
-          checkedIn: weekChecked,
-          pending: Math.max(0, weekTotal - weekChecked),
-          uniqueSupAll: weekUniqueAll,
-          uniqueSupChecked: weekUniqueChecked,
-          completion: weekTotal
-            ? Math.round((weekChecked / weekTotal) * 100)
-            : 0,
-        });
-      }
-    } catch {
-      if (chartTab === 0) {
-        setChartLabels(hourLabels);
-        setChartSeries([
-          {
-            name: "Checked-in (line)",
-            type: "line",
-            data: Array(H_LEN).fill(0),
-          },
-          {
-            name: "Checked-in (bar)",
-            type: "column",
-            data: Array(H_LEN).fill(0),
-          },
-        ]);
-      } else {
-        setChartLabels(labelsMonSun());
-        setChartSeries([
-          { name: "Checked-in (line)", type: "line", data: Array(7).fill(0) },
-          { name: "Checked-in (bar)", type: "column", data: Array(7).fill(0) },
+          { name: "In (kg)", type: "column", data: countsIn },
+          { name: "Out (kg)", type: "column", data: countsOut },
         ]);
       }
     } finally {
       setChartLoading(false);
     }
-  }, [chartTab, dateISO, hourLabels]);
+  }, [chartTab, rowsDay, rowsWeek, hourLabels]);
 
   React.useEffect(() => {
     loadChart();
   }, [loadChart]);
 
-  // เมื่อสลับกลับ Day ให้สรุปมาจากข้อมูลรายวัน
-  React.useEffect(() => {
-    if (chartTab === 0) {
-      const dayTotal = allFiltered.length;
-      const dayChecked = rowsCheckedIn.length;
-      const dayUniqueAll = new Set(
-        allFiltered.map((r) => `${r.supCode}|${r.supplierName}`)
-      ).size;
-      const dayUniqueChecked = new Set(
-        rowsCheckedIn.map((r) => `${r.supCode}|${r.supplierName}`)
-      ).size;
-
-      setSummary({
-        totalBookings: dayTotal,
-        checkedIn: dayChecked,
-        pending: Math.max(0, dayTotal - dayChecked),
-        uniqueSupAll: dayUniqueAll,
-        uniqueSupChecked: dayUniqueChecked,
-        completion: dayTotal ? Math.round((dayChecked / dayTotal) * 100) : 0,
-      });
-    }
-  }, [chartTab, allFiltered, rowsCheckedIn]);
-
-  /* ---------- ตาราง: ใช้แหล่งข้อมูลตามแท็บ ---------- */
-  const tableRows = chartTab === 0 ? rowsCheckedIn : weekRowsCheckedIn;
+  /* ---------- ตาราง: เลือกชุดตามแท็บ ---------- */
+  const tableRows = chartTab === 0 ? rowsDay : rowsWeek;
 
   const paged = React.useMemo(() => {
     const start = page * rowsPerPage;
     return tableRows.slice(start, start + rowsPerPage);
   }, [tableRows, page, rowsPerPage]);
 
-  /* ---------- UI: ใช้ FusePageSimple แบบหน้า Example ---------- */
+  /* ---------- UI ---------- */
   return (
     <LocalizationProvider dateAdapter={AdapterDayjs}>
       <FusePageSimple
@@ -537,12 +524,14 @@ export default function CheckInHistoryPage() {
           <Box className="p-6">
             <Stack direction="row" alignItems="center" spacing={1}>
               <Typography variant="h5" fontWeight={800}>
-                Summary of Checked-in
+                In/Out Weight Dashboard
               </Typography>
               <Box sx={{ flexGrow: 1 }} />
               <IconButton
                 onClick={() =>
-                  chartTab === 1 ? (loadWeekTable(), loadChart()) : load()
+                  chartTab === 1
+                    ? (loadWeek(), loadChart())
+                    : (loadDay(), loadChart())
                 }
                 disabled={loading}
                 title="Refresh"
@@ -595,6 +584,31 @@ export default function CheckInHistoryPage() {
                   </TextField>
                 </FormControl>
 
+                {timePreset === "custom" && (
+                  <>
+                    <FormControl sx={{ width: 140 }}>
+                      <FormLabel>Start</FormLabel>
+                      <TextField
+                        {...FIELD_PROPS}
+                        sx={fieldSx}
+                        value={customStart}
+                        onChange={(e) => setCustomStart(e.target.value)}
+                        placeholder="HH:mm"
+                      />
+                    </FormControl>
+                    <FormControl sx={{ width: 140 }}>
+                      <FormLabel>End</FormLabel>
+                      <TextField
+                        {...FIELD_PROPS}
+                        sx={fieldSx}
+                        value={customEnd}
+                        onChange={(e) => setCustomEnd(e.target.value)}
+                        placeholder="HH:mm"
+                      />
+                    </FormControl>
+                  </>
+                )}
+
                 <FormControl sx={{ flex: 2 }}>
                   <FormLabel>Search (Code / Supplier / Plate)</FormLabel>
                   <TextField
@@ -618,7 +632,9 @@ export default function CheckInHistoryPage() {
                     fullWidth
                     variant="outlined"
                     onClick={() =>
-                      chartTab === 1 ? (loadWeekTable(), loadChart()) : load()
+                      chartTab === 1
+                        ? (loadWeek(), loadChart())
+                        : (loadDay(), loadChart())
                     }
                     disabled={loading}
                     sx={{ borderRadius: 1, height: 33 }}
@@ -636,7 +652,7 @@ export default function CheckInHistoryPage() {
             >
               <div className="flex flex-col items-start justify-between sm:flex-row">
                 <Typography className="truncate text-xl leading-6 font-medium tracking-tight">
-                  Booking Summary
+                  Weights Summary
                 </Typography>
                 <div className="mt-3 sm:mt-0">
                   <Tabs
@@ -654,8 +670,8 @@ export default function CheckInHistoryPage() {
                 <div className="flex flex-auto flex-col">
                   <Typography className="font-medium" color="text.secondary">
                     {chartTab === 0
-                      ? "Checked-in (hourly · 08:00–20:00)"
-                      : "Checked-in per day (Mon–Sun)"}
+                      ? "Sum of In/Out by hour (08:00–20:00)"
+                      : "Sum of In/Out per day (Mon–Sun)"}
                   </Typography>
 
                   <div className="flex flex-auto flex-col">
@@ -679,12 +695,13 @@ export default function CheckInHistoryPage() {
                   </div>
                 </div>
 
-                {/* Right: overview */}
+                {/* Right: overview cards */}
                 <div className="flex flex-col">
                   <Typography className="font-medium" color="text.secondary">
                     Overview
                   </Typography>
                   <div className="mt-6 grid flex-auto grid-cols-4 gap-3">
+                    {/* กล่องน้ำหนักรวมเข้า */}
                     <Box
                       className="col-span-2 flex flex-col items-center justify-center rounded-xl border px-1 py-8"
                       sx={{
@@ -693,121 +710,114 @@ export default function CheckInHistoryPage() {
                       }}
                     >
                       <Typography
-                        className="text-5xl leading-none font-semibold tracking-tight sm:text-7xl"
+                        className="text-4xl leading-none font-semibold tracking-tight sm:text-6xl"
                         color="secondary"
                       >
-                        {summary.checkedIn}
+                        {summary.totalInKg.toLocaleString()}
                       </Typography>
                       <Typography
                         className="mt-1 text-sm font-medium sm:text-lg"
                         color="secondary"
+                      >
+                        Total In (kg)
+                      </Typography>
+                    </Box>
+
+                    {/* กล่องน้ำหนักรวมออก */}
+                    <Box
+                      className="col-span-2 flex flex-col items-center justify-center rounded-xl border px-1 py-8"
+                      sx={{
+                        backgroundColor:
+                          "var(--mui-palette-background-default)",
+                      }}
+                    >
+                      <Typography
+                        className="text-4xl leading-none font-semibold tracking-tight sm:text-6xl"
+                        color="secondary"
+                      >
+                        {summary.totalOutKg.toLocaleString()}
+                      </Typography>
+                      <Typography
+                        className="mt-1 text-sm font-medium sm:text-lg"
+                        color="secondary"
+                      >
+                        Total Out (kg)
+                      </Typography>
+                    </Box>
+
+                    {/* กล่อง Net */}
+                    <Box
+                      className="col-span-2 sm:col-span-1 flex flex-col items-center justify-center rounded-xl border px-1 py-8"
+                      sx={{
+                        backgroundColor:
+                          "var(--mui-palette-background-default)",
+                      }}
+                    >
+                      <Typography className="text-4xl leading-none font-semibold tracking-tight">
+                        {summary.netKg.toLocaleString()}
+                      </Typography>
+                      <Typography
+                        className="mt-1 text-center text-sm font-medium"
+                        color="text.secondary"
+                      >
+                        Net (Out - In)
+                      </Typography>
+                    </Box>
+
+                    {/* กล่อง Checked-in vehicles */}
+                    <Box
+                      className="col-span-2 sm:col-span-1 flex flex-col items-center justify-center rounded-xl border px-1 py-8"
+                      sx={{
+                        backgroundColor:
+                          "var(--mui-palette-background-default)",
+                      }}
+                    >
+                      <Typography className="text-4xl leading-none font-semibold tracking-tight">
+                        {summary.checkedIn}
+                      </Typography>
+                      <Typography
+                        className="mt-1 text-center text-sm font-medium"
+                        color="text.secondary"
                       >
                         Checked-in
                       </Typography>
                     </Box>
 
+                    {/* กล่อง Completed (Out) vehicles */}
                     <Box
-                      className="col-span-2 flex flex-col items-center justify-center rounded-xl border px-1 py-8"
+                      className="col-span-2 sm:col-span-1 flex flex-col items-center justify-center rounded-xl border px-1 py-8"
                       sx={{
                         backgroundColor:
                           "var(--mui-palette-background-default)",
                       }}
                     >
+                      <Typography className="text-4xl leading-none font-semibold tracking-tight">
+                        {summary.completedOut}
+                      </Typography>
                       <Typography
-                        className="text-5xl leading-none font-semibold tracking-tight sm:text-7xl"
-                        color="secondary"
+                        className="mt-1 text-center text-sm font-medium"
+                        color="text.secondary"
                       >
+                        Completed (Out)
+                      </Typography>
+                    </Box>
+
+                    {/* กล่อง Bookings + % */}
+                    <Box
+                      className="col-span-2 sm:col-span-1 flex flex-col items-center justify-center rounded-xl border px-1 py-8"
+                      sx={{
+                        backgroundColor:
+                          "var(--mui-palette-background-default)",
+                      }}
+                    >
+                      <Typography className="text-4xl leading-none font-semibold tracking-tight">
                         {summary.totalBookings}
                       </Typography>
                       <Typography
-                        className="mt-1 text-sm font-medium sm:text-lg"
-                        color="secondary"
-                      >
-                        Bookings
-                      </Typography>
-                    </Box>
-
-                    <Box
-                      className="col-span-2 sm:col-span-1 flex flex-col items-center justify-center rounded-xl border px-1 py-8"
-                      sx={{
-                        backgroundColor:
-                          "var(--mui-palette-background-default)",
-                      }}
-                    >
-                      <Typography
-                        className="text-5xl leading-none font-semibold tracking-tight"
-                        color="text.secondary"
-                      >
-                        {summary.pending}
-                      </Typography>
-                      <Typography
                         className="mt-1 text-center text-sm font-medium"
                         color="text.secondary"
                       >
-                        Pending
-                      </Typography>
-                    </Box>
-
-                    <Box
-                      className="col-span-2 sm:col-span-1 flex flex-col items-center justify-center rounded-xl border px-1 py-8"
-                      sx={{
-                        backgroundColor:
-                          "var(--mui-palette-background-default)",
-                      }}
-                    >
-                      <Typography
-                        className="text-5xl leading-none font-semibold tracking-tight"
-                        color="text.secondary"
-                      >
-                        {summary.uniqueSupAll}
-                      </Typography>
-                      <Typography
-                        className="mt-1 text-center text-sm font-medium"
-                        color="text.secondary"
-                      >
-                        Suppliers
-                      </Typography>
-                    </Box>
-
-                    <Box
-                      className="col-span-2 sm:col-span-1 flex flex-col items-center justify-center rounded-xl border px-1 py-8"
-                      sx={{
-                        backgroundColor:
-                          "var(--mui-palette-background-default)",
-                      }}
-                    >
-                      <Typography
-                        className="text-5xl leading-none font-semibold tracking-tight"
-                        color="text.secondary"
-                      >
-                        {summary.uniqueSupChecked}
-                      </Typography>
-                      <Typography
-                        className="mt-1 text-center text-sm font-medium"
-                        color="text.secondary"
-                      >
-                        Sup. Checked
-                      </Typography>
-                    </Box>
-
-                    <Box
-                      className="col-span-2 sm:col-span-1 flex flex-col items-center justify-center rounded-xl border px-1 py-8"
-                      sx={{
-                        backgroundColor:
-                          "var(--mui-palette-background-default)",
-                      }}
-                    >
-                      <Typography
-                        className="text-5xl leading-none font-semibold tracking-tight"
-                        color="text.secondary"
-                      >
-                        {summary.completion}%
-                      </Typography>
-                      <Typography
-                        className="mt-1 text-center text-sm font-medium"
-                        color="text.secondary"
-                      >
-                        Completion
+                        Bookings · {summary.completion}%
                       </Typography>
                     </Box>
                   </div>
@@ -815,13 +825,13 @@ export default function CheckInHistoryPage() {
               </div>
             </Paper>
 
-            {/* หมายเหตุ (ใช้ summary) */}
+            {/* หมายเหตุ */}
             <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-              แสดงเฉพาะรายการที่<strong>เช็คอินแล้ว</strong> {summary.checkedIn}{" "}
-              จาก {summary.totalBookings} รายการ
+              แสดงผลตามช่วงเวลา/คำค้นที่เลือก • รวม{" "}
+              {summary.totalBookings.toLocaleString()} รายการ
             </Typography>
 
-            {/* ตาราง: แสดงตามแท็บที่เลือก */}
+            {/* ตารางสรุปตามแท็บ */}
             <Paper variant="outlined" sx={{ borderRadius: RADIUS }}>
               <TableContainer>
                 <Table size="small" stickyHeader>
@@ -836,70 +846,120 @@ export default function CheckInHistoryPage() {
                       <TableCell>License Plate</TableCell>
                       <TableCell>Truck Type</TableCell>
                       <TableCell>Rubber Type</TableCell>
+                      <TableCell align="right" width={140}>
+                        In (kg)
+                      </TableCell>
+                      <TableCell align="right" width={140}>
+                        Out (kg)
+                      </TableCell>
+                      <TableCell align="right" width={140}>
+                        Net (kg)
+                      </TableCell>
+                      <TableCell align="center" width={110}>
+                        Status
+                      </TableCell>
                     </TableRow>
                   </TableHead>
 
                   <TableBody>
-                    {paged.map((r, idx) => (
-                      <TableRow key={r.id || r.bookingCode} hover>
-                        <TableCell align="center">
-                          {page * rowsPerPage + idx + 1}.
-                        </TableCell>
+                    {paged.map((r, idx) => {
+                      const alreadyOut = isTrailer(r.truckType)
+                        ? r.weightOutHead != null || r.weightOutTrailer != null
+                        : r.weightOut != null;
 
-                        <TableCell>
-                          <Chip
-                            size="small"
-                            label={
-                              r.checkInTime
-                                ? dayjs(r.checkInTime).format("HH:mm")
-                                : "-"
-                            }
-                            variant="outlined"
-                            sx={{
-                              borderColor: "black",
-                              color: "black",
-                              bgcolor: "white",
-                              fontWeight: 600,
-                            }}
-                          />
-                        </TableCell>
+                      const hasIn =
+                        r.weightIn != null ||
+                        r.weightInHead != null ||
+                        r.weightInTrailer != null;
 
-                        <TableCell>{r.bookingCode}</TableCell>
-                        <TableCell align="center">
-                          {r.sequence ?? "-"}
-                        </TableCell>
+                      const net = calcNet(r);
+                      const statusColor = alreadyOut
+                        ? "success"
+                        : hasIn
+                          ? "warning"
+                          : "default";
+                      const statusText = alreadyOut
+                        ? "ออกแล้ว"
+                        : hasIn
+                          ? "เข้าแล้ว"
+                          : "-";
 
-                        <TableCell>
-                          {r.startTime}
-                          {r.endTime ? ` - ${r.endTime}` : ""}
-                        </TableCell>
+                      return (
+                        <TableRow key={r.id || r.bookingCode} hover>
+                          <TableCell align="center">
+                            {page * rowsPerPage + idx + 1}.
+                          </TableCell>
 
-                        <TableCell sx={{ maxWidth: 320 }}>
-                          <Typography
-                            variant="body2"
-                            noWrap
-                            title={`${r.supCode} : ${r.supplierName}`}
-                          >
-                            {r.supCode} : {r.supplierName}
-                          </Typography>
-                        </TableCell>
-
-                        <TableCell>{r.truckRegister || "-"}</TableCell>
-                        <TableCell>{r.truckType || "-"}</TableCell>
-
-                        <TableCell>
-                          {r.rubberTypeName ? (
+                          <TableCell>
                             <Chip
                               size="small"
-                              label={r.rubberTypeName}
-                              sx={rubberChipSx(r.rubberTypeName)}
+                              label={
+                                r.checkInTime
+                                  ? dayjs(r.checkInTime).format("HH:mm")
+                                  : "-"
+                              }
+                              variant="outlined"
+                              sx={{
+                                borderColor: "black",
+                                color: "black",
+                                bgcolor: "white",
+                                fontWeight: 600,
+                              }}
                             />
-                          ) : (
-                            "-"
-                          )}
-                        </TableCell>
-                      </TableRow>
-                    ))}
+                          </TableCell>
+
+                          <TableCell>{r.bookingCode}</TableCell>
+                          <TableCell align="center">
+                            {r.sequence ?? "-"}
+                          </TableCell>
+
+                          <TableCell>
+                            {r.startTime}
+                            {r.endTime ? ` - ${r.endTime}` : ""}
+                          </TableCell>
+
+                          <TableCell sx={{ maxWidth: 320 }}>
+                            <Typography
+                              variant="body2"
+                              noWrap
+                              title={`${r.supCode} : ${r.supplierName}`}
+                            >
+                              {r.supCode} : {r.supplierName}
+                            </Typography>
+                          </TableCell>
+
+                          <TableCell>{r.truckRegister || "-"}</TableCell>
+                          <TableCell>{r.truckType || "-"}</TableCell>
+
+                          <TableCell>
+                            {r.rubberTypeName ? (
+                              <Chip
+                                size="small"
+                                label={r.rubberTypeName}
+                                sx={rubberChipSx(r.rubberTypeName)}
+                              />
+                            ) : (
+                              "-"
+                            )}
+                          </TableCell>
+
+                          <TableCell align="right">{showIn(r)}</TableCell>
+                          <TableCell align="right">{showOut(r)}</TableCell>
+                          <TableCell align="right">
+                            {net == null ? "-" : net.toLocaleString()}
+                          </TableCell>
+
+                          <TableCell align="center">
+                            <Chip
+                              size="small"
+                              label={statusText}
+                              color={statusColor as any}
+                              variant={alreadyOut ? "filled" : "outlined"}
+                            />
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
                   </TableBody>
 
                   <TableFooter>

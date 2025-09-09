@@ -81,7 +81,7 @@ const navigationConfig: FuseNavItemType[] = [
 				title: 'Dashboard',
 				type: 'item',
 				icon: 'lucide:chart-no-axes-combined',
-				url: '/check-in/history',
+				url: '/dashboard/received-rubber',
 				end: true,
 			},
 			{
