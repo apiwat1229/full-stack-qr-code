@@ -10,35 +10,38 @@ import {
   FormControl,
   FormControlLabel,
   FormLabel,
+  MenuItem,
   TextField,
 } from "@mui/material";
 import _ from "lodash";
 import { signIn } from "next-auth/react";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Controller, useForm } from "react-hook-form";
 import { z } from "zod";
 import AuthJsProviderSelect from "./AuthJsProviderSelect";
 import signinErrors from "./signinErrors";
 
+/* ===== Props ===== */
 type AuthJsFormProps = {
-  /** เดิมเป็น 'signin' | 'signup' แต่เพื่อให้เหมือน SignInPageForm ให้แสดงฟอร์ม Sign In เป็นหลัก */
-  formType?: "signin"; // ฟิกซ์ให้เป็น signin เพื่อความชัดเจน (ถ้าจะรองรับ signup ค่อยแยกคอมโพเนนต์)
-  /** ตั้งค่า default callback หลัง login (ถ้าต้องการ) */
+  formType?: "signin";
+  /** fallback ถ้าไม่มี callbackUrl และไม่มี route จาก system */
   defaultCallbackUrl?: string;
 };
 
-/** ให้สอดคล้องกับ SignInPageForm: label/โครง MUI + validation */
+/* ===== Schema ===== */
+const SystemEnum = z.enum(["qr", "dla", "pm"]);
+
 const schema = z.object({
   email: z
     .string()
     .email("You must enter a valid email")
     .nonempty("You must enter an email"),
-  // ให้เหมือน SignInPageForm: min 8 chars
   password: z
     .string()
     .min(8, "Password is too short - must be at least 8 chars.")
     .nonempty("Please enter your password."),
   remember: z.boolean().optional(),
+  system: SystemEnum, // ต้องเลือกเสมอ
 });
 
 type FormType = z.infer<typeof schema>;
@@ -47,15 +50,26 @@ const defaultValues: FormType = {
   email: "",
   password: "",
   remember: true,
+  system: "qr",
 };
 
+/* 🔧 กำหนดปลายทางตามระบบที่เลือก (แก้ได้ตามใจ) */
+const ROUTE_BY_SYSTEM: Record<FormType["system"], string> = {
+  qr: "/dashboard/qr-code/v1",
+  dla: "/dashboard/dla/v1",
+  pm: "/dashboard/pm/v1",
+};
+
+/* ===== Component ===== */
 function AuthJsForm({
   formType = "signin",
   defaultCallbackUrl = "/",
 }: AuthJsFormProps) {
   const searchParams = useSearchParams();
+  const router = useRouter();
+
   const urlErrorType = searchParams.get("error");
-  const callbackUrl = searchParams.get("callbackUrl") || defaultCallbackUrl;
+  const callbackUrlFromUrl = searchParams.get("callbackUrl"); // 🔧 ถ้ามี query จะชนะทุกอย่าง
 
   const urlErrorMsg =
     urlErrorType && (signinErrors[urlErrorType] ?? signinErrors.default);
@@ -68,16 +82,31 @@ function AuthJsForm({
 
   const { isValid, dirtyFields, errors } = formState;
 
-  async function onSubmit(values: FormType) {
-    const { email, password } = values;
+  /* 🔧 ฟังก์ชันเลือกปลายทางตามลำดับความสำคัญ */
+  function resolveRedirectTarget(system: FormType["system"]) {
+    // 1) callbackUrl จาก query มาก่อน
+    if (callbackUrlFromUrl) return callbackUrlFromUrl;
 
-    // ใช้ redirect: false เพื่อให้ AuthGuard/logic ภายนอกเป็นคนพาไปหน้าเป้าหมาย
-    // ถ้าอยากให้หน้านี้พาไปเองให้เปลี่ยนเป็น redirect: true, callbackUrl
+    // 2) route map ตาม system
+    const fromSystem = ROUTE_BY_SYSTEM[system];
+    if (fromSystem) return fromSystem;
+
+    // 3) fallback prop
+    return defaultCallbackUrl || "/";
+  }
+
+  async function onSubmit(values: FormType) {
+    const { email, password, system } = values;
+
+    try {
+      localStorage.setItem("selected_system", system);
+    } catch {}
+
+    // แนะนำให้ใช้ redirect:false แล้วค่อย router.push เอง จะ control ง่ายสุด
     const result = await signIn("credentials", {
       email,
       password,
       redirect: false,
-      // callbackUrl, // ถ้าอยากให้ฟอร์มพา redirect เอง ค่อยเปิดใช้งาน
     });
 
     if (result?.error) {
@@ -88,10 +117,12 @@ function AuthJsForm({
       return false;
     }
 
+    // 🔧 ตัดสินใจปลายทางที่นี่
+    const target = resolveRedirectTarget(system);
+    router.push(target);
     return true;
   }
 
-  // ฟอร์มนี้ทำหน้าที่ “Sign In” อย่างเดียว เพื่อให้หน้าตาตรงกับ SignInPageForm
   return (
     <form
       name="loginForm"
@@ -151,6 +182,33 @@ function AuthJsForm({
         )}
       />
 
+      {/* Select System */}
+      <Controller
+        name="system"
+        control={control}
+        defaultValue="qr"
+        render={({ field }) => (
+          <FormControl>
+            <FormLabel>Select System</FormLabel>
+            <TextField
+              {...field}
+              select
+              required
+              value={field.value ?? "qr"}
+              error={!!errors.system}
+              helperText={
+                errors.system?.message ? "Please select a system" : undefined
+              }
+              fullWidth
+            >
+              <MenuItem value="qr">QR Code</MenuItem>
+              <MenuItem value="dla">Data Lake and Analytics</MenuItem>
+              <MenuItem value="pm">Project management</MenuItem>
+            </TextField>
+          </FormControl>
+        )}
+      />
+
       {/* Remember + Forgot */}
       <div className="flex flex-col items-center justify-center sm:flex-row sm:justify-between">
         <Controller
@@ -184,7 +242,7 @@ function AuthJsForm({
         Sign in
       </Button>
 
-      {/* ปุ่ม social แบบ dynamic ผ่าน AuthJsProviderSelect (แทนปุ่ม mock) */}
+      {/* Social providers */}
       <AuthJsProviderSelect />
     </form>
   );

@@ -1,4 +1,3 @@
-// src/app/(control-panel)/check-out/checked/components/WeightOutDialog.tsx
 "use client";
 
 import {
@@ -16,15 +15,12 @@ import * as React from "react";
 type Props = {
   open: boolean;
   onClose: () => void;
-  /** รถพ่วงหรือไม่ (พ่วง = กรอกหัว/หาง, เดี่ยว = กรอกรวม) */
   trailer?: boolean;
-  /** ค่าเริ่มต้น (ถ้ามี) */
   initial?: {
     weight_out?: number | null;
     weight_out_head?: number | null;
     weight_out_trailer?: number | null;
   };
-  /** callback เมื่อกดบันทึก (ยิง API ภายนอก) */
   onSave: (payload: {
     weight_out?: number | null;
     weight_out_head?: number | null;
@@ -33,6 +29,20 @@ type Props = {
 };
 
 const RADIUS = 1;
+
+/** utils: format/parse with commas */
+const addCommas = (raw: string) => {
+  const s = raw.replace(/[^\d]/g, ""); // keep digits only
+  if (!s) return "";
+  return s.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+};
+const stripCommas = (s: string) => s.replace(/,/g, "");
+const toNumOrNull = (s: string) => {
+  const t = stripCommas(s.trim());
+  if (t === "") return null;
+  const n = Number(t);
+  return Number.isFinite(n) ? n : NaN;
+};
 
 export default function WeightOutDialog({
   open,
@@ -43,7 +53,7 @@ export default function WeightOutDialog({
 }: Props) {
   const [saving, setSaving] = React.useState(false);
 
-  // state ตามประเภทรถ
+  // state (เป็น string ที่มีคอมมา)
   const [wOut, setWOut] = React.useState<string>("");
   const [wOutHead, setWOutHead] = React.useState<string>("");
   const [wOutTrailer, setWOutTrailer] = React.useState<string>("");
@@ -51,13 +61,17 @@ export default function WeightOutDialog({
   React.useEffect(() => {
     if (open) {
       setSaving(false);
-      setWOut(initial?.weight_out != null ? String(initial?.weight_out) : "");
+      setWOut(
+        initial?.weight_out != null ? addCommas(String(initial.weight_out)) : ""
+      );
       setWOutHead(
-        initial?.weight_out_head != null ? String(initial?.weight_out_head) : ""
+        initial?.weight_out_head != null
+          ? addCommas(String(initial.weight_out_head))
+          : ""
       );
       setWOutTrailer(
         initial?.weight_out_trailer != null
-          ? String(initial?.weight_out_trailer)
+          ? addCommas(String(initial.weight_out_trailer))
           : ""
       );
     }
@@ -65,25 +79,17 @@ export default function WeightOutDialog({
   }, [open]);
 
   // validation
-  const numOrNull = (s: string) => {
-    const t = s.trim();
-    if (t === "") return null;
-    const n = Number(t);
-    return Number.isFinite(n) ? n : NaN;
-  };
-
   const invalidSingle =
     !trailer &&
-    (Number.isNaN(numOrNull(wOut)) || (numOrNull(wOut) as number) < 0);
-
+    (Number.isNaN(toNumOrNull(wOut)) || (toNumOrNull(wOut) as number) < 0);
   const invalidHead =
     trailer &&
-    (Number.isNaN(numOrNull(wOutHead)) || (numOrNull(wOutHead) as number) < 0);
-
+    (Number.isNaN(toNumOrNull(wOutHead)) ||
+      (toNumOrNull(wOutHead) as number) < 0);
   const invalidTail =
     trailer &&
-    (Number.isNaN(numOrNull(wOutTrailer)) ||
-      (numOrNull(wOutTrailer) as number) < 0);
+    (Number.isNaN(toNumOrNull(wOutTrailer)) ||
+      (toNumOrNull(wOutTrailer) as number) < 0);
 
   const canSave = trailer
     ? !invalidHead &&
@@ -91,23 +97,32 @@ export default function WeightOutDialog({
       (wOutHead.trim() !== "" || wOutTrailer.trim() !== "")
     : !invalidSingle && wOut.trim() !== "";
 
+  // onChange ที่ดูดคีย์และแสดงคอมมาทันที
+  const onChangeWithComma =
+    (setter: (v: string) => void) =>
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const raw = e.target.value;
+      // อนุญาตเฉพาะเลข/คอมมา เว้นวรรค/backspace/paste ได้
+      const clean = raw.replace(/[^\d,]/g, "");
+      // ถ้ามีคอมมาในรูปร่างผิด ให้รีฟอร์แมตใหม่จาก digit ล้วน
+      setter(addCommas(clean));
+    };
+
   const handleSubmit = async () => {
     if (!canSave) return;
     try {
       setSaving(true);
       if (trailer) {
         await onSave({
-          weight_out_head: numOrNull(wOutHead),
-          weight_out_trailer: numOrNull(wOutTrailer),
+          weight_out_head: toNumOrNull(wOutHead),
+          weight_out_trailer: toNumOrNull(wOutTrailer),
         });
       } else {
         await onSave({
-          weight_out: numOrNull(wOut),
+          weight_out: toNumOrNull(wOut),
         });
       }
       onClose();
-    } catch (e) {
-      // ให้หน้าหลักแสดง snackbar เองอยู่แล้ว
     } finally {
       setSaving(false);
     }
@@ -134,45 +149,44 @@ export default function WeightOutDialog({
             <>
               <TextField
                 label="น้ำหนักออก (หัว) - kg"
-                type="number"
                 value={wOutHead}
-                onChange={(e) => setWOutHead(e.target.value)}
+                onChange={onChangeWithComma(setWOutHead)}
                 onKeyDown={onKeyDownSubmit}
                 error={invalidHead}
                 helperText={invalidHead ? "กรุณากรอกตัวเลข ≥ 0" : " "}
-                inputProps={{ min: 0, step: "1", inputMode: "numeric" }}
+                inputProps={{ inputMode: "numeric" }}
                 sx={{ "& .MuiOutlinedInput-root": { borderRadius: RADIUS } }}
               />
               <TextField
                 label="น้ำหนักออก (หาง) - kg"
-                type="number"
                 value={wOutTrailer}
-                onChange={(e) => setWOutTrailer(e.target.value)}
+                onChange={onChangeWithComma(setWOutTrailer)}
                 onKeyDown={onKeyDownSubmit}
                 error={invalidTail}
                 helperText={invalidTail ? "กรุณากรอกตัวเลข ≥ 0" : " "}
-                inputProps={{ min: 0, step: "1", inputMode: "numeric" }}
+                inputProps={{ inputMode: "numeric" }}
                 sx={{ "& .MuiOutlinedInput-root": { borderRadius: RADIUS } }}
               />
               <Alert severity="info" sx={{ borderRadius: RADIUS }}>
                 รถพ่วงให้กรอกเป็น <strong>หัว / หาง</strong> แยกกัน
+                (จะแสดงคอมมาอัตโนมัติ)
               </Alert>
             </>
           ) : (
             <>
               <TextField
                 label="น้ำหนักออก (รวม) - kg"
-                type="number"
                 value={wOut}
-                onChange={(e) => setWOut(e.target.value)}
+                onChange={onChangeWithComma(setWOut)}
                 onKeyDown={onKeyDownSubmit}
                 error={invalidSingle}
                 helperText={invalidSingle ? "กรุณากรอกตัวเลข ≥ 0" : " "}
-                inputProps={{ min: 0, step: "1", inputMode: "numeric" }}
+                inputProps={{ inputMode: "numeric" }}
                 sx={{ "& .MuiOutlinedInput-root": { borderRadius: RADIUS } }}
               />
               <Alert severity="info" sx={{ borderRadius: RADIUS }}>
                 รถเดี่ยวกรอกเป็น <strong>น้ำหนักรวม</strong> ช่องเดียว
+                (จะแสดงคอมมาอัตโนมัติ)
               </Alert>
             </>
           )}

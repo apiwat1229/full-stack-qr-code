@@ -1,3 +1,4 @@
+// src/@auth/AuthGuardRedirect.tsx
 "use client";
 
 import {
@@ -16,24 +17,43 @@ import useUser from "./useUser";
 type AuthGuardProps = {
   auth: FuseRouteObjectType["auth"];
   children: React.ReactNode;
+  /** ปลายทางปริยายถ้าไม่มี redirectUrl อื่น */
   loginRedirectUrl?: string;
+};
+
+// map ระบบ → เส้นทาง
+const ROUTE_BY_SYSTEM: Record<string, string> = {
+  qr: "/dashboard/qr-code/v1",
+  dla: "/dashboard/dla/v1",
+  pm: "/dashboard/pm/v1",
 };
 
 function AuthGuardRedirect({
   auth,
   children,
-  loginRedirectUrl = "/",
+  loginRedirectUrl = "/example", // ✅ เปลี่ยน default จาก "/" → "/example"
 }: AuthGuardProps) {
   const { data: user, isGuest } = useUser();
   const userRole = user?.role;
   const navigate = useNavigate();
-
-  const [accessGranted, setAccessGranted] = useState<boolean>(false);
   const pathname = usePathname();
 
-  // Function to handle redirection
+  const [accessGranted, setAccessGranted] = useState<boolean>(false);
+
+  // เลือกปลายทางเริ่มต้นเมื่อ "ไม่มี sessionRedirectUrl"
+  const resolveDefaultRedirect = useCallback(() => {
+    // 1) system จาก localStorage (client-side เท่านั้น)
+    try {
+      const s = localStorage.getItem("selected_system") || "";
+      if (s && ROUTE_BY_SYSTEM[s]) return ROUTE_BY_SYSTEM[s];
+    } catch {}
+
+    // 2) ค่าที่ส่งเข้ามาใน props
+    return loginRedirectUrl || "/";
+  }, [loginRedirectUrl]);
+
   const handleRedirection = useCallback(() => {
-    const redirectUrl = getSessionRedirectUrl() || loginRedirectUrl;
+    const redirectUrl = getSessionRedirectUrl() || resolveDefaultRedirect();
 
     if (isGuest) {
       navigate("/sign-in");
@@ -41,9 +61,8 @@ function AuthGuardRedirect({
       navigate(redirectUrl);
       resetSessionRedirectUrl();
     }
-  }, [isGuest, loginRedirectUrl, navigate]);
+  }, [isGuest, navigate, resolveDefaultRedirect]);
 
-  // Check user's permissions and set access granted state
   useEffect(() => {
     const isOnlyGuestAllowed = Array.isArray(auth) && auth.length === 0;
     const userHasPermission = FuseUtils.hasPermission(auth, userRole);
@@ -56,38 +75,42 @@ function AuthGuardRedirect({
       "/404",
     ];
 
-    if (
-      !auth ||
-      (auth && userHasPermission) ||
-      (isOnlyGuestAllowed && isGuest)
-    ) {
+    // ✅ ถ้าหน้า “/” และล็อกอินแล้ว ให้เด้งไปปลายทาง default
+    if (!isGuest && pathname === "/") {
+      setAccessGranted(false);
+      navigate(resolveDefaultRedirect());
+      return;
+    }
+
+    // ✅ กรณีเข้าหน้าที่เปิดสิทธิ์ตรง role หรือเป็น guest-only ที่เป็น guest จริง
+    if (!auth || userHasPermission || (isOnlyGuestAllowed && isGuest)) {
       setAccessGranted(true);
       return;
     }
 
+    // ✅ ตั้ง sessionRedirectUrl ไว้พากลับหลังผ่าน auth
     if (!userHasPermission) {
       if (isGuest && !ignoredPaths.includes(pathname)) {
         setSessionRedirectUrl(pathname);
       } else if (!isGuest && !ignoredPaths.includes(pathname)) {
-        /**
-         * If user is member but don't have permission to view the route
-         * redirected to main route '/'
-         */
-        if (isOnlyGuestAllowed) {
-          setSessionRedirectUrl("/");
-        } else {
-          setSessionRedirectUrl("/401");
-        }
+        // เป็น member แต่ไม่มีสิทธิ์
+        setSessionRedirectUrl(isOnlyGuestAllowed ? "/" : "/401");
       }
     }
 
+    setAccessGranted(false);
     handleRedirection();
-  }, [auth, userRole, isGuest, pathname, handleRedirection]);
+  }, [
+    auth,
+    userRole,
+    isGuest,
+    pathname,
+    handleRedirection,
+    navigate,
+    resolveDefaultRedirect,
+  ]);
 
-  // Return children if access is granted, otherwise null
   return accessGranted ? children : <FuseLoading />;
 }
-
-// the landing page "/" redirected to /example but the example npt
 
 export default AuthGuardRedirect;

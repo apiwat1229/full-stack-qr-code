@@ -1,3 +1,4 @@
+// src/app/(control-panel)/check-out/page.tsx
 "use client";
 
 import dayjs, { Dayjs } from "dayjs";
@@ -6,6 +7,7 @@ dayjs.extend(duration);
 
 import FusePageSimple from "@fuse/core/FusePageSimple";
 import DownloadIcon from "@mui/icons-material/Download";
+import EditIcon from "@mui/icons-material/Edit";
 import ReplayIcon from "@mui/icons-material/Replay";
 import SaveIcon from "@mui/icons-material/Save";
 import SearchIcon from "@mui/icons-material/Search";
@@ -49,15 +51,6 @@ const api = (path: string) =>
 const EVENTS_API = (dateISO: string) =>
   api(`/bookings/events?date=${encodeURIComponent(dateISO)}`);
 const UPDATE_WEIGHTS_API = (id: string) => api(`/bookings/${id}/weights`);
-const ME_API = api(`/admin/users/me`);
-
-type Perms = {
-  create?: boolean;
-  read?: boolean;
-  update?: boolean;
-  delete?: boolean;
-  approve?: boolean;
-};
 
 type BookingView = {
   id: string;
@@ -125,7 +118,7 @@ async function fetchJSON<T>(
   const bearer = token || getStoredToken();
   if (bearer && !headers.has("Authorization"))
     headers.set("Authorization", `Bearer ${bearer}`);
-  if (!headers.has("Content-Type") && init?.body)
+  if (!headers.has("Content-Type") && !!init?.body)
     headers.set("Content-Type", "application/json");
   const res = await fetch(url, {
     cache: "no-store",
@@ -242,7 +235,7 @@ function normalizeFromEvent(raw: any): BookingView {
   };
 }
 
-/** เงื่อนไขพร้อมแสดงในหน้า “รอบันทึกน้ำหนักขาออก” */
+/** พร้อมบันทึกน้ำหนักขาออกไหม (ใช้คำนวณสถิติ/ตัวกรองได้) */
 function readyForWeightOut(r: BookingView): boolean {
   const hasTimes = !!r.checkInTime && !!r.drainStartTime && !!r.drainStopTime;
   if (!hasTimes) return false;
@@ -254,7 +247,6 @@ function readyForWeightOut(r: BookingView): boolean {
 
   if (!hasIn) return false;
 
-  // แสดงเฉพาะที่ยังไม่ได้บันทึกขาออก
   const hasOutAlready = trailer
     ? r.weightOutHead != null && r.weightOutTrailer != null
     : r.weightOut != null;
@@ -283,6 +275,9 @@ export default function WeightOutListPage() {
   const [timePreset, setTimePreset] = React.useState<"all" | "am" | "pm">(
     "all"
   );
+  const [showMode, setShowMode] = React.useState<"all" | "pending" | "done">(
+    "all"
+  );
   const [query, setQuery] = React.useState("");
 
   const [rows, setRows] = React.useState<BookingView[]>([]);
@@ -308,28 +303,50 @@ export default function WeightOutListPage() {
     setLoading(true);
     try {
       const events = await callApi<any[]>(EVENTS_API(listDateISO));
-      const normalized = (events || [])
-        .map(normalizeFromEvent)
-        .filter(readyForWeightOut)
-        .filter(
-          (r) =>
-            (timePreset === "all" || (r.startTime >= s && r.startTime <= e)) &&
-            (query.trim() === "" ||
-              [r.bookingCode, r.truckRegister, r.supCode, r.supplierName]
-                .join(" ")
-                .toLowerCase()
-                .includes(query.trim().toLowerCase()))
-        )
+      const mapped = (events || []).map(normalizeFromEvent);
+
+      const isAlreadyOut = (r: BookingView) =>
+        isTrailer(r.truckType)
+          ? r.weightOutHead != null && r.weightOutTrailer != null
+          : r.weightOut != null;
+
+      const passCommon = (r: BookingView) =>
+        (timePreset === "all" || (r.startTime >= s && r.startTime <= e)) &&
+        (query.trim() === "" ||
+          [r.bookingCode, r.truckRegister, r.supCode, r.supplierName]
+            .join(" ")
+            .toLowerCase()
+            .includes(query.trim().toLowerCase()));
+
+      const pendingCount = mapped.filter(readyForWeightOut).length;
+      const totalCount = mapped.length;
+
+      const filtered = mapped
+        .filter((r) => {
+          if (!passCommon(r)) return false;
+          if (showMode === "pending") return !isAlreadyOut(r);
+          if (showMode === "done") return isAlreadyOut(r);
+          return true;
+        })
         .sort((a, b) => {
+          // เรียง pending ก่อน done
+          const ao = isAlreadyOut(a) ? 1 : 0;
+          const bo = isAlreadyOut(b) ? 1 : 0;
+          if (ao !== bo) return ao - bo;
+
           const qa = a.sequence || 0;
           const qb = b.sequence || 0;
           if (qa !== qb) return qa - qb;
           const ta = a.checkInTime ? dayjs(a.checkInTime).valueOf() : 0;
           const tb = b.checkInTime ? dayjs(b.checkInTime).valueOf() : 0;
           return ta - tb;
-        });
-      setRows(normalized);
-    } catch (e: any) {
+        }) as BookingView[] & { _pendingCount?: number; _totalCount?: number };
+
+      filtered._pendingCount = pendingCount;
+      filtered._totalCount = totalCount;
+
+      setRows(filtered);
+    } catch {
       setRows([]);
       setToast({
         open: true,
@@ -339,7 +356,7 @@ export default function WeightOutListPage() {
     } finally {
       setLoading(false);
     }
-  }, [listDateISO, getWindow, timePreset, query, callApi]);
+  }, [listDateISO, getWindow, timePreset, query, callApi, showMode]);
 
   React.useEffect(() => {
     loadData();
@@ -367,8 +384,38 @@ export default function WeightOutListPage() {
     weight_out_trailer?: number | null;
   }) => {
     if (!dlgRow) return;
+
     try {
-      await saveWeightOut(dlgRow.id, payload);
+      const trailer = isTrailer(dlgRow.truckType);
+
+      // ส่งเฉพาะ field ที่มีค่า
+      const clean: Record<string, number> = {};
+
+      if (trailer) {
+        const head = payload.weight_out_head;
+        const tail = payload.weight_out_trailer;
+
+        if (head == null && tail == null) {
+          setToast({
+            open: true,
+            msg: "กรุณากรอกน้ำหนักอย่างน้อย 1 ช่อง (หัว/หาง)",
+            sev: "error",
+          });
+          return;
+        }
+
+        if (head != null) clean.weight_out_head = head;
+        if (tail != null) clean.weight_out_trailer = tail;
+      } else {
+        const out = payload.weight_out;
+        if (out == null) {
+          setToast({ open: true, msg: "กรุณากรอกน้ำหนักออก", sev: "error" });
+          return;
+        }
+        clean.weight_out = out;
+      }
+
+      await saveWeightOut(dlgRow.id, clean);
       setToast({ open: true, msg: "บันทึก Weight Out แล้ว", sev: "success" });
       setDlgOpen(false);
       setDlgRow(null);
@@ -377,6 +424,10 @@ export default function WeightOutListPage() {
       setToast({ open: true, msg: `บันทึกไม่ได้: ${e.message}`, sev: "error" });
     }
   };
+
+  const pendingCount =
+    (rows as any)._pendingCount ?? rows.filter(readyForWeightOut).length;
+  const totalCount = (rows as any)._totalCount ?? rows.length;
 
   return (
     <LocalizationProvider dateAdapter={AdapterDayjs}>
@@ -394,8 +445,9 @@ export default function WeightOutListPage() {
                   Weight Out
                 </Typography>
                 <Typography variant="body2" color="text.secondary">
-                  แสดงเฉพาะรายการที่พร้อมบันทึกน้ำหนักขาออกแล้ว •{" "}
-                  {rows.length.toLocaleString()} รายการ
+                  แสดงผล: {rows.length.toLocaleString()} รายการ • รอบันทึก{" "}
+                  {pendingCount.toLocaleString()}/{totalCount.toLocaleString()}{" "}
+                  ทั้งหมด
                 </Typography>
               </Box>
               <Button
@@ -483,6 +535,24 @@ export default function WeightOutListPage() {
                   </TextField>
                 </FormControl>
 
+                {/* โหมดแสดงผล */}
+                <FormControl sx={{ width: { xs: "100%", md: 220 } }}>
+                  <FormLabel>สถานะ</FormLabel>
+                  <TextField
+                    {...FIELD_PROPS}
+                    sx={fieldSx}
+                    select
+                    value={showMode}
+                    onChange={(e) =>
+                      setShowMode(e.target.value as "all" | "pending" | "done")
+                    }
+                  >
+                    <MenuItem value="all">ทั้งหมด</MenuItem>
+                    <MenuItem value="pending">รอบันทึก</MenuItem>
+                    <MenuItem value="done">บันทึกแล้ว</MenuItem>
+                  </TextField>
+                </FormControl>
+
                 <FormControl sx={{ flex: 1, minWidth: 220 }}>
                   <FormLabel>Search</FormLabel>
                   <TextField
@@ -508,6 +578,7 @@ export default function WeightOutListPage() {
                   onClick={() => {
                     setQuery("");
                     setTimePreset("all");
+                    setShowMode("all");
                     loadData();
                   }}
                   startIcon={<ReplayIcon />}
@@ -543,41 +614,45 @@ export default function WeightOutListPage() {
                       <TableCell>License Plate</TableCell>
                       <TableCell>Truck Type</TableCell>
                       <TableCell width={140} align="right">
-                        Weight In (kg)
+                        Weight In ( Kg. )
                       </TableCell>
-                      {/* ✅ ช่องใหม่ แสดงน้ำหนักขาออกที่ถูกบันทึกไว้ */}
-                      <TableCell width={140} align="right">
-                        Weight Out (kg)
+                      <TableCell width={180} align="right">
+                        Weight Out ( Kg. )
                       </TableCell>
-                      <TableCell width={100} align="right">
-                        บันทึก
+                      <TableCell width={110} align="center">
+                        Action
                       </TableCell>
+                      {/* ✅ คอลัมน์ Status ต่อท้ายปุ่ม */}
                     </TableRow>
                   </TableHead>
                   <TableBody>
                     {loading ? (
                       Array.from({ length: 6 }).map((_, i) => (
                         <TableRow key={`sk-${i}`}>
-                          <TableCell colSpan={9}>
+                          <TableCell colSpan={10}>
                             <Skeleton height={24} />
                           </TableCell>
                         </TableRow>
                       ))
                     ) : rows.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={9}>
+                        <TableCell colSpan={10}>
                           <Typography
                             variant="body2"
                             color="text.secondary"
                             align="center"
                           >
-                            ไม่มีรายการที่พร้อมบันทึกน้ำหนักขาออกตามเงื่อนไข
+                            ไม่มีรายการตามเงื่อนไข
                           </Typography>
                         </TableCell>
                       </TableRow>
                     ) : (
                       rows.map((r) => {
                         const trailer = isTrailer(r.truckType);
+                        const alreadyOut = trailer
+                          ? r.weightOutHead != null &&
+                            r.weightOutTrailer != null
+                          : r.weightOut != null;
 
                         const weightInText = trailer
                           ? `${r.weightInHead?.toLocaleString() ?? "-"} / ${r.weightInTrailer?.toLocaleString() ?? "-"}`
@@ -613,19 +688,32 @@ export default function WeightOutListPage() {
                             <TableCell>{r.truckType || "-"}</TableCell>
 
                             <TableCell align="right">{weightInText}</TableCell>
-                            {/* ✅ แสดงค่าน้ำหนักขาออกที่บันทึกไว้ */}
                             <TableCell align="right">{weightOutText}</TableCell>
 
-                            <TableCell align="right">
-                              <Button
-                                size="small"
-                                variant="contained"
-                                startIcon={<SaveIcon />}
-                                onClick={() => openDialog(r)}
-                                sx={{ borderRadius: RADIUS }}
-                              >
-                                บันทึก
-                              </Button>
+                            <TableCell align="center">
+                              {alreadyOut ? (
+                                <Button
+                                  size="small"
+                                  variant="outlined" // ✅ outlined = ปุ่มขาว ขอบดำ
+                                  color="inherit"
+                                  startIcon={<EditIcon />} // ✅ ใช้ EditIcon
+                                  onClick={() => openDialog(r)}
+                                  sx={{ borderRadius: RADIUS }}
+                                >
+                                  แก้ไข
+                                </Button>
+                              ) : (
+                                <Button
+                                  size="small"
+                                  variant="contained" // ✅ ปุ่มปกติสีน้ำเงิน
+                                  color="secondary"
+                                  startIcon={<SaveIcon />} // ✅ ใช้ SaveIcon
+                                  onClick={() => openDialog(r)}
+                                  sx={{ borderRadius: RADIUS }}
+                                >
+                                  บันทึก
+                                </Button>
+                              )}
                             </TableCell>
                           </TableRow>
                         );
@@ -637,8 +725,9 @@ export default function WeightOutListPage() {
 
               <Divider sx={{ my: 2 }} />
               <Alert severity="info" sx={{ borderRadius: RADIUS }}>
-                รวม {rows.length.toLocaleString()} รายการ
-                (แสดงเฉพาะที่พร้อมบันทึกขาออก)
+                รวม {rows.length.toLocaleString()} รายการ • รอบันทึก{" "}
+                {pendingCount.toLocaleString()} / {totalCount.toLocaleString()}{" "}
+                ทั้งหมด
               </Alert>
             </Paper>
 
