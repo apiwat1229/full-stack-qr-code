@@ -40,10 +40,41 @@ import FusePageSimple from "@fuse/core/FusePageSimple";
 
 /* ================= CONFIG ================= */
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE?.replace(/\/+$/, "") || "";
-const api = (path: string) =>
-  `${API_BASE}${path.startsWith("/") ? path : `/${path}`}`;
+const api = (p: string) => `${API_BASE}${p.startsWith("/") ? p : `/${p}`}`;
 const EVENTS_API = (dateISO: string) =>
   api(`/api/bookings/events?date=${encodeURIComponent(dateISO)}`);
+
+/* ===== สีโทนสดใส (ปรับได้ง่าย ๆ) ===== */
+const VIBRANT_PALETTE = [
+  "#00C853",
+  "#2979FF",
+  "#FF6D00",
+  "#AA00FF",
+  "#00B8D4",
+  "#C51162",
+  "#FFD600",
+  "#64DD17",
+  "#2962FF",
+  "#00E5FF",
+  "#FF1744",
+  "#00E676",
+];
+const NAMED_COLORS: Record<string, string> = {
+  "regular cl": "#2979FF",
+  "fsc cl": "#00C853",
+  "eudr cl": "#FF6D00",
+  "fsc uss": "#64DD17",
+  "eudr uss": "#AA00FF",
+  uss: "#00B8D4",
+  "cup lump": "#FF1744",
+};
+function colorForType(name: string): string {
+  const key = (name || "").trim().toLowerCase();
+  if (NAMED_COLORS[key]) return NAMED_COLORS[key];
+  let h = 0;
+  for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) >>> 0;
+  return VIBRANT_PALETTE[h % VIBRANT_PALETTE.length];
+}
 
 /* =============== Types & utils =============== */
 type BookingRow = {
@@ -57,26 +88,21 @@ type BookingRow = {
   supplierName: string;
   truckRegister: string;
   truckType?: string;
-
   rubberTypeName?: string;
   checkInTime?: string | null;
-
   weightIn?: number | null;
   weightInHead?: number | null;
   weightInTrailer?: number | null;
-
   weightOut?: number | null;
   weightOutHead?: number | null;
   weightOutTrailer?: number | null;
 };
-
-type RangeTab = 0 | 1 | 2; // 0: Day, 1: Week, 2: Month
+type RangeTab = 0 | 1 | 2;
 
 const HOUR_CHOICES = Array.from(
   { length: 24 },
   (_, h) => `${String(h).padStart(2, "0")}:00`
 );
-
 const fmt = (n?: number | null) => (n == null ? "-" : n.toLocaleString());
 
 function normalizeFromEvent(raw: any): BookingRow {
@@ -102,52 +128,41 @@ function normalizeFromEvent(raw: any): BookingRow {
     truckType: xp.truck_type ?? xp.truck_type_name ?? "",
     rubberTypeName: xp.rubber_type_name ?? xp.rubber_type ?? "",
     checkInTime: xp.check_in_time ?? null,
-
     weightIn: xp.weight_in ?? null,
     weightInHead: xp.weight_in_head ?? null,
     weightInTrailer: xp.weight_in_trailer ?? null,
-
     weightOut: xp.weight_out ?? null,
     weightOutHead: xp.weight_out_head ?? null,
     weightOutTrailer: xp.weight_out_trailer ?? null,
   };
 }
-
 const isTrailer = (tt?: string) =>
   (tt || "").toLowerCase().includes("พ่วง") ||
   (tt || "").toLowerCase().includes("trailer");
-
-function rowInSum(r: BookingRow) {
-  if (isTrailer(r.truckType))
-    return (r.weightInHead ?? 0) + (r.weightInTrailer ?? 0);
-  return r.weightIn ?? 0;
-}
-function rowOutSum(r: BookingRow) {
-  if (isTrailer(r.truckType))
-    return (r.weightOutHead ?? 0) + (r.weightOutTrailer ?? 0);
-  return r.weightOut ?? 0;
-}
-function rowAbsNet(r: BookingRow) {
-  const diff = Math.abs((rowOutSum(r) || 0) - (rowInSum(r) || 0));
-  if (!Number.isFinite(diff) || diff <= 0) return 0;
-  return diff;
-}
+const rowInSum = (r: BookingRow) =>
+  isTrailer(r.truckType)
+    ? (r.weightInHead ?? 0) + (r.weightInTrailer ?? 0)
+    : (r.weightIn ?? 0);
+const rowOutSum = (r: BookingRow) =>
+  isTrailer(r.truckType)
+    ? (r.weightOutHead ?? 0) + (r.weightOutTrailer ?? 0)
+    : (r.weightOut ?? 0);
+/** น้ำหนักสำหรับกราฟ/สัดส่วน: มี Out ใช้ Out ไม่งั้นใช้ In */
+const rowUseWeight = (r: BookingRow) => rowOutSum(r) || rowInSum(r) || 0;
 
 /* ================= Page ================= */
 export default function DashboardSummaryPage() {
   const theme = useTheme();
 
-  // ---- Tabs / Range ----
-  const [tab, setTab] = React.useState<RangeTab>(0); // Day
+  // Tabs / Date range
+  const [tab, setTab] = React.useState<RangeTab>(0);
   const todayRef = React.useRef(dayjs().startOf("day"));
-
-  // เริ่มต้น: วันนี้ → วันนี้
   const [from, setFrom] = React.useState<Dayjs | null>(todayRef.current);
   const [to, setTo] = React.useState<Dayjs | null>(todayRef.current);
 
   const alignFromForTab = React.useCallback((base: Dayjs, which: RangeTab) => {
     if (which === 0) return base.startOf("day");
-    if (which === 1) return base.startOf("isoWeek"); // Monday
+    if (which === 1) return base.startOf("isoWeek");
     return base.startOf("month");
   }, []);
   const computeTo = React.useCallback((baseFrom: Dayjs, which: RangeTab) => {
@@ -156,55 +171,48 @@ export default function DashboardSummaryPage() {
     return baseFrom.endOf("month").startOf("day");
   }, []);
 
-  // ✅ เปลี่ยนแท็บ: รีเซ็ตฐานเป็น "วันนี้" เสมอ แล้ว align ให้ตรงช่วง
-  const onChangeTab = (_: React.SyntheticEvent, newValue: RangeTab) => {
-    setTab(newValue);
-    const base = todayRef.current; // ← ใช้วันนี้เป็นฐานทุกครั้ง
-    const nf = alignFromForTab(base, newValue);
-    const nt = computeTo(nf, newValue);
+  const onChangeTab = (_: any, v: RangeTab) => {
+    setTab(v);
+    const nf = alignFromForTab(todayRef.current, v);
     setFrom(nf);
-    setTo(nt);
+    setTo(computeTo(nf, v));
   };
 
-  // === handlers ที่ “ปิดลูป” ===
   const handleFromChange = React.useCallback(
     (v: Dayjs | null) => {
-      if (!v) {
-        setFrom(null);
-        return;
-      }
-      const aligned = alignFromForTab(v.startOf("day"), tab);
-      setFrom(aligned);
-      setTo(computeTo(aligned, tab));
+      if (!v) return setFrom(null);
+      const f = alignFromForTab(v.startOf("day"), tab);
+      setFrom(f);
+      setTo(computeTo(f, tab));
     },
     [tab, alignFromForTab, computeTo]
   );
-
   const handleToChange = React.useCallback(
     (v: Dayjs | null) => {
-      if (!v) {
-        setTo(null);
-        return;
-      }
-      const next = v.startOf("day");
-      setTo(from && next.isBefore(from, "day") ? from : next);
+      if (!v) return setTo(null);
+      const t = v.startOf("day");
+      setTo(from && t.isBefore(from, "day") ? from : t);
     },
     [from]
   );
 
-  // ---- Filters ----
+  // Filters
   const [q, setQ] = React.useState("");
   const [hourStart, setHourStart] = React.useState("08:00");
   const [hourEnd, setHourEnd] = React.useState("20:00");
 
-  // ---- Data ----
+  // Data
   const [loading, setLoading] = React.useState(false);
   const [rows, setRows] = React.useState<BookingRow[]>([]);
   const [toast, setToast] = React.useState<{
     open: boolean;
     msg: string;
     sev: "success" | "error" | "info";
-  }>({ open: false, msg: "", sev: "success" });
+  }>({
+    open: false,
+    msg: "",
+    sev: "success",
+  });
 
   const bookingsTotal = rows.length;
   const inProgress = rows.filter((r) => {
@@ -214,14 +222,13 @@ export default function DashboardSummaryPage() {
     return !!r.checkInTime && !out;
   }).length;
 
-  /* ---------------- Load data for range ---------------- */
+  // Fetch
   async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
     const res = await fetch(url, { cache: "no-store", ...init });
     const txt = await res.text().catch(() => "");
     if (!res.ok) throw new Error(txt || `HTTP ${res.status}`);
     return txt ? (JSON.parse(txt) as T) : ({} as T);
   }
-
   const loadRange = React.useCallback(async () => {
     if (!from || !to) return;
     setLoading(true);
@@ -235,19 +242,18 @@ export default function DashboardSummaryPage() {
         const ev = await fetchJSON<any[]>(EVENTS_API(d.format("YYYY-MM-DD")));
         all.push(...(ev || []).map(normalizeFromEvent));
       }
-
       const term = q.trim().toLowerCase();
-      const filtered = term
-        ? all.filter(
-            (r) =>
-              r.bookingCode?.toLowerCase().includes(term) ||
-              r.supplierName?.toLowerCase().includes(term) ||
-              r.supCode?.toLowerCase().includes(term) ||
-              r.truckRegister?.toLowerCase().includes(term)
-          )
-        : all;
-
-      setRows(filtered);
+      setRows(
+        term
+          ? all.filter(
+              (r) =>
+                r.bookingCode?.toLowerCase().includes(term) ||
+                r.supplierName?.toLowerCase().includes(term) ||
+                r.supCode?.toLowerCase().includes(term) ||
+                r.truckRegister?.toLowerCase().includes(term)
+            )
+          : all
+      );
     } catch (e: any) {
       setRows([]);
       setToast({
@@ -260,20 +266,17 @@ export default function DashboardSummaryPage() {
     }
   }, [from, to, q]);
 
-  // โหลดเมื่อช่วง / คำค้น เปลี่ยน
   React.useEffect(() => {
     const t = setTimeout(loadRange, 120);
     return () => clearTimeout(t);
   }, [loadRange]);
-
-  // ยิงโหลดทันทีเมื่อเปลี่ยนแท็บ
   React.useEffect(() => {
     const t = setTimeout(loadRange, 10);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab]);
 
-  /* ---------------- Chart buckets ---------------- */
+  /* ----------------- Aggregation (stacked) ----------------- */
   const hourLabels = React.useMemo(() => {
     const sH = parseInt(hourStart.slice(0, 2), 10);
     const eH = parseInt(hourEnd.slice(0, 2), 10);
@@ -282,65 +285,97 @@ export default function DashboardSummaryPage() {
       list.push(`${String(h).padStart(2, "0")}:00`);
     return list;
   }, [hourStart, hourEnd]);
-
   const weekLabels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-  const dayIndexMonSun = (d: Dayjs) => {
-    const js = d.day(); // 0=Sun
-    return js === 0 ? 6 : js - 1;
-  };
-
+  const dayIndexMonSun = (d: Dayjs) => (d.day() === 0 ? 6 : d.day() - 1);
   const monthLabels = React.useMemo(() => {
     if (!from) return [];
-    const start = from.startOf("month");
-    const end = start.endOf("month");
-    const days = end.diff(start, "day") + 1;
-    return Array.from({ length: days }, (_, i) => String(i + 1));
+    const s = from.startOf("month");
+    const e = s.endOf("month");
+    const n = e.diff(s, "day") + 1;
+    return Array.from({ length: n }, (_, i) => String(i + 1));
   }, [from]);
 
-  const { chartLabels, chartSeries } = React.useMemo(() => {
-    if (tab === 0) {
-      const vals = hourLabels.map(() => 0);
-      for (const r of rows) {
-        const cin = r.checkInTime ? dayjs(r.checkInTime) : null;
-        if (!cin) continue;
-        const hh = `${String(cin.hour()).padStart(2, "0")}:00`;
-        const idx = hourLabels.indexOf(hh);
-        if (idx >= 0) vals[idx] += rowAbsNet(r);
-      }
-      return {
-        chartLabels: hourLabels,
-        chartSeries: [{ name: "Net", data: vals }],
-      };
-    }
-    if (tab === 1) {
-      const vals = Array(7).fill(0);
-      for (const r of rows) {
-        const cin = r.checkInTime ? dayjs(r.checkInTime) : null;
-        if (!cin) continue;
-        const idx = dayIndexMonSun(cin);
-        vals[idx] += rowAbsNet(r);
-      }
-      return {
-        chartLabels: weekLabels,
-        chartSeries: [{ name: "Net", data: vals }],
-      };
-    }
-    const labels = monthLabels;
-    const vals = labels.map(() => 0);
+  type Series = {
+    name: string;
+    data: number[];
+    type?: "line";
+    color?: string;
+    showInLegend?: boolean;
+  };
+  const { chartLabels, seriesForChart, typeOrder } = React.useMemo(() => {
+    const labels =
+      tab === 0 ? hourLabels : tab === 1 ? weekLabels : monthLabels;
+    const len = labels.length;
+
+    const byType = new Map<string, number[]>();
+    const ensure = (name: string) => {
+      const k = (name || "—").trim();
+      if (!byType.has(k)) byType.set(k, Array(len).fill(0));
+      return byType.get(k)!;
+    };
+
     for (const r of rows) {
+      const name = (r.rubberTypeName || "—").trim();
+      const w = rowUseWeight(r);
+      if (w <= 0) continue;
       const cin = r.checkInTime ? dayjs(r.checkInTime) : null;
       if (!cin) continue;
-      const idx = cin.date() - 1;
-      if (idx >= 0 && idx < vals.length) vals[idx] += rowAbsNet(r);
-    }
-    return { chartLabels: labels, chartSeries: [{ name: "Net", data: vals }] };
-  }, [tab, rows, hourLabels, weekLabels, monthLabels]);
 
-  /* ---------------- Chart options (Bar) ---------------- */
+      let idx = -1;
+      if (tab === 0) {
+        const hh = `${String(cin.hour()).padStart(2, "0")}:00`;
+        idx = hourLabels.indexOf(hh);
+      } else if (tab === 1) {
+        idx = dayIndexMonSun(cin);
+      } else {
+        idx = cin.date() - 1;
+      }
+      if (idx < 0 || idx >= len) continue;
+      ensure(name)[idx] += w;
+    }
+
+    const order = Array.from(byType.entries())
+      .map(([name, data]) => ({ name, sum: data.reduce((s, v) => s + v, 0) }))
+      .sort((a, b) => b.sum - a.sum)
+      .map((x) => x.name);
+
+    const stacked: Series[] = order.map((name) => ({
+      name,
+      data: byType.get(name)!,
+    }));
+
+    // รวมยอดต่อ bucket
+    const totals = Array(len).fill(0);
+    for (let i = 0; i < len; i++) {
+      let s = 0;
+      order.forEach((name) => (s += byType.get(name)![i]));
+      totals[i] = s;
+    }
+
+    // === ซีรีส์เส้นโปร่งใสสำหรับแปะ "ตัวเลขรวมเหนือแท่ง" ===
+    const totalLabelSeries: Series = {
+      name: "__totals__",
+      type: "line",
+      data: totals,
+      color: "transparent",
+      showInLegend: false,
+    };
+
+    return {
+      chartLabels: labels,
+      seriesForChart: [...stacked, totalLabelSeries],
+      typeOrder: order,
+    };
+  }, [rows, tab, hourLabels, weekLabels, monthLabels]);
+
+  /* ---------------- Chart options ---------------- */
+  const totalLabelSeriesIndex = Math.max(0, seriesForChart.length - 1);
+
   const chartOptions: ApexOptions = React.useMemo(
     () => ({
       chart: {
         type: "bar",
+        stacked: true,
         height: "100%",
         toolbar: { show: false },
         fontFamily: "inherit",
@@ -350,16 +385,22 @@ export default function DashboardSummaryPage() {
       plotOptions: {
         bar: {
           columnWidth: tab === 0 ? "55%" : "45%",
-          dataLabels: { position: "top" },
         },
       },
+      // แสดง label เฉพาะซีรีส์ __totals__ (เส้นโปร่งใส) → จะลอยเหนือยอดแท่งเสมอ
       dataLabels: {
         enabled: true,
+        enabledOnSeries: [totalLabelSeriesIndex],
         formatter: (val: number) => (val ? val.toLocaleString() : ""),
-        offsetY: -34,
-        style: { colors: [theme.palette.text.primary], fontWeight: "700" },
+        offsetY: -22,
+        style: { colors: [theme.palette.text.primary], fontWeight: "800" },
+        background: { enabled: false },
       },
-      stroke: { show: false },
+      stroke: {
+        show: true,
+        width: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], // เส้นของ line ซ่อนไว้
+      },
+      markers: { size: 0 }, // ไม่ให้เห็นจุดของซีรีส์เส้น
       grid: { borderColor: theme.palette.divider },
       xaxis: {
         categories: chartLabels,
@@ -370,10 +411,20 @@ export default function DashboardSummaryPage() {
         title: { text: "Total Net (kg)" },
         labels: { style: { colors: theme.palette.text.secondary } },
       },
-      tooltip: { theme: theme.palette.mode },
-      colors: [theme.palette.grey[800]],
+      tooltip: {
+        theme: theme.palette.mode,
+        shared: true,
+        intersect: false, // สำคัญ: เปิด shared ต้องปิด intersect
+        y: { formatter: (v) => (v ? v.toLocaleString() + " kg" : "0 kg") },
+      },
+      // ให้สีสดใสตามชนิด (ไม่รวมซีรีส์ totals ที่โปร่งใส)
+      colors: seriesForChart.slice(0, -1).map((s) => colorForType(s.name)),
+      legend: {
+        show: true,
+        formatter: (name) => (name === "__totals__" ? "" : name),
+      },
     }),
-    [theme, chartLabels, tab]
+    [theme, chartLabels, tab, seriesForChart, totalLabelSeriesIndex]
   );
 
   const headerRangeText =
@@ -389,7 +440,7 @@ export default function DashboardSummaryPage() {
           <Box className="p-6">
             <Stack direction="row" alignItems="center" spacing={1}>
               <Typography variant="h5" fontWeight={800}>
-                Summary of Received Cuplump
+                Summary of Received Rubber
               </Typography>
               <Box sx={{ flexGrow: 1 }} />
               <IconButton onClick={() => loadRange()} disabled={loading}>
@@ -418,9 +469,7 @@ export default function DashboardSummaryPage() {
                   <Tab label="This Week" value={1} />
                   <Tab label="This Month" value={2} />
                 </Tabs>
-
                 <Box sx={{ flexGrow: 1 }} />
-
                 <FormControl sx={{ width: 180 }}>
                   <FormLabel>From</FormLabel>
                   <DatePicker
@@ -436,7 +485,6 @@ export default function DashboardSummaryPage() {
                     }}
                   />
                 </FormControl>
-
                 <FormControl sx={{ width: 180 }}>
                   <FormLabel>To</FormLabel>
                   <DatePicker
@@ -452,7 +500,6 @@ export default function DashboardSummaryPage() {
                     }}
                   />
                 </FormControl>
-
                 <FormControl sx={{ minWidth: 260, flex: 1 }}>
                   <FormLabel>Search (Code / Supplier / Plate)</FormLabel>
                   <TextField
@@ -470,6 +517,38 @@ export default function DashboardSummaryPage() {
                     sx={{ "& .MuiOutlinedInput-root": { borderRadius: 1 } }}
                   />
                 </FormControl>
+                {tab === 0 && (
+                  <Stack direction="row" spacing={1.25} alignItems="center">
+                    <Typography variant="body2" color="text.secondary">
+                      Hour Range
+                    </Typography>
+                    <Select
+                      size="small"
+                      value={hourStart}
+                      onChange={(e) => setHourStart(e.target.value)}
+                    >
+                      {HOUR_CHOICES.map((h) => (
+                        <MenuItem key={h} value={h}>
+                          {h}
+                        </MenuItem>
+                      ))}
+                    </Select>
+                    <Typography variant="body2" color="text.secondary">
+                      to
+                    </Typography>
+                    <Select
+                      size="small"
+                      value={hourEnd}
+                      onChange={(e) => setHourEnd(e.target.value)}
+                    >
+                      {HOUR_CHOICES.map((h) => (
+                        <MenuItem key={h} value={h}>
+                          {h}
+                        </MenuItem>
+                      ))}
+                    </Select>
+                  </Stack>
+                )}
               </Stack>
             </Paper>
 
@@ -484,7 +563,6 @@ export default function DashboardSummaryPage() {
               <Typography className="font-medium" color="text.secondary">
                 Overview • {headerRangeText}
               </Typography>
-
               <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <Box className="rounded-xl border px-1 py-8 flex flex-col items-center justify-center">
                   <Typography
@@ -500,7 +578,6 @@ export default function DashboardSummaryPage() {
                     Bookings (Range)
                   </Typography>
                 </Box>
-
                 <Box className="rounded-xl border px-1 py-8 flex flex-col items-center justify-center">
                   <Typography
                     className="text-5xl leading-none font-semibold tracking-tight"
@@ -521,70 +598,30 @@ export default function DashboardSummaryPage() {
             {/* Charts */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-12 items-start">
               <div>
-                <Stack
-                  direction="row"
-                  alignItems="center"
-                  justifyContent="space-between"
-                  sx={{ mb: 1 }}
-                >
-                  <Typography variant="subtitle2">
-                    {tab === 0
-                      ? "Total Net by hour (abs(Out − In))"
-                      : tab === 1
-                        ? "Total Net by day (Mon–Sun)"
-                        : "Total Net by day (this month)"}
-                  </Typography>
-
-                  {tab === 0 && (
-                    <Stack direction="row" spacing={1.25} alignItems="center">
-                      <Typography variant="body2" color="text.secondary">
-                        Hour Range
-                      </Typography>
-                      <Select
-                        size="small"
-                        value={hourStart}
-                        onChange={(e) => setHourStart(e.target.value)}
-                      >
-                        {HOUR_CHOICES.map((h) => (
-                          <MenuItem key={h} value={h}>
-                            {h}
-                          </MenuItem>
-                        ))}
-                      </Select>
-                      <Typography variant="body2" color="text.secondary">
-                        to
-                      </Typography>
-                      <Select
-                        size="small"
-                        value={hourEnd}
-                        onChange={(e) => setHourEnd(e.target.value)}
-                      >
-                        {HOUR_CHOICES.map((h) => (
-                          <MenuItem key={h} value={h}>
-                            {h}
-                          </MenuItem>
-                        ))}
-                      </Select>
-                    </Stack>
-                  )}
-                </Stack>
-
+                <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                  {tab === 0
+                    ? "Total Net by hour (abs(Out − In))"
+                    : tab === 1
+                      ? "Total Net by day (Mon–Sun)"
+                      : "Total Net by day (this month)"}
+                </Typography>
                 <Paper variant="outlined" sx={{ borderRadius: 1, p: 1 }}>
                   {loading ? (
-                    <Box sx={{ height: 320 }}>
+                    <Box sx={{ height: 340 }}>
                       <FuseLoading />
                     </Box>
                   ) : (
                     <ReactApexChart
                       options={chartOptions}
-                      series={chartSeries}
+                      series={seriesForChart}
                       type="bar"
-                      height={320}
+                      height={340}
                     />
                   )}
                 </Paper>
               </div>
 
+              {/* Right: Rubber types summary */}
               <div>
                 <Typography variant="subtitle2" sx={{ mb: 1 }}>
                   Rubber Types (weight & share)
@@ -595,7 +632,7 @@ export default function DashboardSummaryPage() {
                       const byType = new Map<string, number>();
                       for (const r of rows) {
                         const name = (r.rubberTypeName || "—").trim();
-                        const w = rowOutSum(r) || rowInSum(r) || 0;
+                        const w = rowUseWeight(r);
                         if (w <= 0) continue;
                         byType.set(name, (byType.get(name) || 0) + w);
                       }
@@ -610,6 +647,7 @@ export default function DashboardSummaryPage() {
                             const pct = total
                               ? Math.round((it.weight / total) * 100)
                               : 0;
+                            const barColor = colorForType(it.name);
                             return (
                               <Box key={it.name}>
                                 <Stack
@@ -622,11 +660,7 @@ export default function DashboardSummaryPage() {
                                     size="small"
                                     label={it.name || "—"}
                                     sx={{
-                                      bgcolor:
-                                        it.name.toLowerCase().includes("fsc") ||
-                                        it.name.toLowerCase().includes("cl")
-                                          ? "#1b5e20"
-                                          : "#263238",
+                                      bgcolor: barColor,
                                       color: "#fff",
                                       fontWeight: 700,
                                     }}
@@ -657,7 +691,7 @@ export default function DashboardSummaryPage() {
                                     sx={{
                                       width: `${pct}%`,
                                       height: "100%",
-                                      bgcolor: "text.primary",
+                                      bgcolor: barColor,
                                     }}
                                   />
                                 </Box>
