@@ -77,6 +77,14 @@ const navigationConfig: FuseNavItemType[] = [
 		icon: 'lucide:truck',
 		children: [
 			{
+				id: 'dashboard-truck-scale',
+				title: 'Dashboard',
+				type: 'item',
+				icon: 'lucide:chart-no-axes-combined',
+				url: '/check-in/history',
+				end: true,
+			},
+			{
 				id: 'checkin',
 				title: 'Check In',
 				type: 'item',
@@ -98,14 +106,6 @@ const navigationConfig: FuseNavItemType[] = [
 				type: 'item',
 				icon: 'lucide:log-out',
 				url: '/check-out',
-				end: true,
-			},
-			{
-				id: 'checkin-history',
-				title: 'Booking History',
-				type: 'item',
-				icon: 'lucide:archive',
-				url: '/check-in/history',
 				end: true,
 			},
 		],
