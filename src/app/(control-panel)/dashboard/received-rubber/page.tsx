@@ -1,8 +1,10 @@
-// src/app/check-in/history/page.tsx
+// src/app/(control-panel)/dashboard/received-rubber/page.tsx
 "use client";
 
 import dayjs, { Dayjs } from "dayjs";
-import _ from "lodash";
+import isoWeek from "dayjs/plugin/isoWeek";
+dayjs.extend(isoWeek);
+
 import { motion } from "motion/react";
 import * as React from "react";
 
@@ -11,7 +13,6 @@ import SearchIcon from "@mui/icons-material/Search";
 import {
   Alert,
   Box,
-  Button,
   Chip,
   FormControl,
   FormLabel,
@@ -19,25 +20,18 @@ import {
   InputAdornment,
   MenuItem,
   Paper,
+  Select,
   Snackbar,
   Stack,
   Tab,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableFooter,
-  TableHead,
-  TablePagination,
-  TableRow,
   Tabs,
   TextField,
   Typography,
 } from "@mui/material";
 import { useTheme } from "@mui/material/styles";
-import { DatePicker } from "@mui/x-date-pickers";
+import { DatePicker, LocalizationProvider } from "@mui/x-date-pickers";
 import { AdapterDayjs } from "@mui/x-date-pickers/AdapterDayjs";
-import { LocalizationProvider } from "@mui/x-date-pickers/LocalizationProvider";
+
 import type { ApexOptions } from "apexcharts";
 import ReactApexChart from "react-apexcharts";
 
@@ -46,84 +40,78 @@ import FusePageSimple from "@fuse/core/FusePageSimple";
 
 /* ================= CONFIG ================= */
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE?.replace(/\/+$/, "") || "";
-const api = (path: string) =>
-  `${API_BASE}${path.startsWith("/") ? path : `/${path}`}`;
+const api = (p: string) => `${API_BASE}${p.startsWith("/") ? p : `/${p}`}`;
 const EVENTS_API = (dateISO: string) =>
   api(`/api/bookings/events?date=${encodeURIComponent(dateISO)}`);
 
-/* ================= UI const ================= */
-const RADIUS = 1;
-const FIELD_PROPS = { size: "small", variant: "outlined" } as const;
-const fieldSx = { "& .MuiOutlinedInput-root": { borderRadius: 1 } };
+/* ===== สีโทนสดใส (ปรับได้ง่าย ๆ) ===== */
+const VIBRANT_PALETTE = [
+  "#00C853",
+  "#2979FF",
+  "#FF6D00",
+  "#AA00FF",
+  "#00B8D4",
+  "#C51162",
+  "#FFD600",
+  "#64DD17",
+  "#2962FF",
+  "#00E5FF",
+  "#FF1744",
+  "#00E676",
+];
+const NAMED_COLORS: Record<string, string> = {
+  "regular cl": "#2979FF",
+  "fsc cl": "#00C853",
+  "eudr cl": "#FF6D00",
+  "fsc uss": "#64DD17",
+  "eudr uss": "#AA00FF",
+  uss: "#00B8D4",
+  "cup lump": "#FF1744",
+};
+function colorForType(name: string): string {
+  const key = (name || "").trim().toLowerCase();
+  if (NAMED_COLORS[key]) return NAMED_COLORS[key];
+  let h = 0;
+  for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) >>> 0;
+  return VIBRANT_PALETTE[h % VIBRANT_PALETTE.length];
+}
 
-// ช่วงเวลา 08:00–20:00
-const H_START = 8;
-const H_END = 20; // inclusive
-const H_LEN = H_END - H_START + 1;
-
-/* ================= Types ================= */
-type BookingView = {
+/* =============== Types & utils =============== */
+type BookingRow = {
   id: string;
-  bookingCode: string;
-  sequence?: number | null;
   date: string;
   startTime: string;
   endTime?: string;
+  bookingCode: string;
+  sequence?: number | null;
   supCode: string;
   supplierName: string;
   truckRegister: string;
   truckType?: string;
   rubberTypeName?: string;
-  recorder?: string;
   checkInTime?: string | null;
+  weightIn?: number | null;
+  weightInHead?: number | null;
+  weightInTrailer?: number | null;
+  weightOut?: number | null;
+  weightOutHead?: number | null;
+  weightOutTrailer?: number | null;
 };
+type RangeTab = 0 | 1 | 2;
 
-type TimePreset = "all" | "am" | "pm" | "custom";
+const HOUR_CHOICES = Array.from(
+  { length: 24 },
+  (_, h) => `${String(h).padStart(2, "0")}:00`
+);
+const fmt = (n?: number | null) => (n == null ? "-" : n.toLocaleString());
 
-type Summary = {
-  totalBookings: number;
-  checkedIn: number;
-  pending: number;
-  uniqueSupAll: number;
-  uniqueSupChecked: number;
-  completion: number; // %
-};
-
-/* ================= Helpers ================= */
-async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, {
-    cache: "no-store",
-    credentials: "include",
-    ...init,
-  });
-  const txt = await res.text().catch(() => "");
-  if (!res.ok) throw new Error(txt || `HTTP ${res.status}`);
-  return txt ? (JSON.parse(txt) as T) : ({} as T);
-}
-
-function rubberChipSx(name?: string) {
-  const n = (name || "").toLowerCase();
-  if (n.includes("fsc"))
-    return { bgcolor: "#2e7d32", color: "#fff", fontWeight: 700 };
-  if (n.includes("north-east") && n.includes("eudr"))
-    return { bgcolor: "#00897b", color: "#fff", fontWeight: 700 };
-  if (n.includes("eudr"))
-    return { bgcolor: "#1565c0", color: "#fff", fontWeight: 700 };
-  if (n.includes("north-east"))
-    return { bgcolor: "#6a1b9a", color: "#fff", fontWeight: 700 };
-  if (n.includes("regular"))
-    return { bgcolor: "#455a64", color: "#fff", fontWeight: 700 };
-  return { bgcolor: "#9e9e9e", color: "#fff", fontWeight: 700 };
-}
-
-function joinSupplierName(xp: any, raw: any) {
-  return `${xp?.title ?? ""}${xp?.firstName ?? raw?.firstName ?? ""} ${xp?.lastName ?? raw?.lastName ?? ""}`.trim();
-}
-
-function normalizeFromEvent(raw: any): BookingView {
+function normalizeFromEvent(raw: any): BookingRow {
   const xp = raw?.extendedProps ?? {};
   return {
-    id: String(raw?.id ?? raw?._id ?? raw?.id_str ?? xp.booking_code ?? ""),
+    id: String(raw?.id ?? raw?._id ?? xp.booking_code ?? ""),
+    date: String(raw?.start ?? "").slice(0, 10),
+    startTime: dayjs(raw?.start).format("HH:mm"),
+    endTime: raw?.end ? dayjs(raw?.end).format("HH:mm") : "",
     bookingCode: xp.booking_code ?? "",
     sequence:
       Number(
@@ -134,402 +122,317 @@ function normalizeFromEvent(raw: any): BookingView {
           raw?.order ??
           NaN
       ) || null,
-    date: String(raw?.start).slice(0, 10),
-    startTime: dayjs(raw?.start).format("HH:mm"),
-    endTime: raw?.end ? dayjs(raw?.end).format("HH:mm") : "",
     supCode: xp.supplier_code ?? "-",
-    supplierName: xp.supplier_name ?? joinSupplierName(xp, raw),
+    supplierName: xp.supplier_name ?? "",
     truckRegister: xp.truck_register ?? "",
     truckType: xp.truck_type ?? xp.truck_type_name ?? "",
     rubberTypeName: xp.rubber_type_name ?? xp.rubber_type ?? "",
-    recorder: xp.recorded_by ?? "",
     checkInTime: xp.check_in_time ?? null,
+    weightIn: xp.weight_in ?? null,
+    weightInHead: xp.weight_in_head ?? null,
+    weightInTrailer: xp.weight_in_trailer ?? null,
+    weightOut: xp.weight_out ?? null,
+    weightOutHead: xp.weight_out_head ?? null,
+    weightOutTrailer: xp.weight_out_trailer ?? null,
   };
 }
+const isTrailer = (tt?: string) =>
+  (tt || "").toLowerCase().includes("พ่วง") ||
+  (tt || "").toLowerCase().includes("trailer");
+const rowInSum = (r: BookingRow) =>
+  isTrailer(r.truckType)
+    ? (r.weightInHead ?? 0) + (r.weightInTrailer ?? 0)
+    : (r.weightIn ?? 0);
+const rowOutSum = (r: BookingRow) =>
+  isTrailer(r.truckType)
+    ? (r.weightOutHead ?? 0) + (r.weightOutTrailer ?? 0)
+    : (r.weightOut ?? 0);
+/** น้ำหนักสำหรับกราฟ/สัดส่วน: มี Out ใช้ Out ไม่งั้นใช้ In */
+const rowUseWeight = (r: BookingRow) => rowOutSum(r) || rowInSum(r) || 0;
 
-/* =============== Page =============== */
-export default function CheckInHistoryPage() {
+/* ================= Page ================= */
+export default function DashboardSummaryPage() {
   const theme = useTheme();
 
+  // Tabs / Date range
+  const [tab, setTab] = React.useState<RangeTab>(0);
+  const todayRef = React.useRef(dayjs().startOf("day"));
+  const [from, setFrom] = React.useState<Dayjs | null>(todayRef.current);
+  const [to, setTo] = React.useState<Dayjs | null>(todayRef.current);
+
+  const alignFromForTab = React.useCallback((base: Dayjs, which: RangeTab) => {
+    if (which === 0) return base.startOf("day");
+    if (which === 1) return base.startOf("isoWeek");
+    return base.startOf("month");
+  }, []);
+  const computeTo = React.useCallback((baseFrom: Dayjs, which: RangeTab) => {
+    if (which === 0) return baseFrom;
+    if (which === 1) return baseFrom.add(6, "day");
+    return baseFrom.endOf("month").startOf("day");
+  }, []);
+
+  const onChangeTab = (_: any, v: RangeTab) => {
+    setTab(v);
+    const nf = alignFromForTab(todayRef.current, v);
+    setFrom(nf);
+    setTo(computeTo(nf, v));
+  };
+
+  const handleFromChange = React.useCallback(
+    (v: Dayjs | null) => {
+      if (!v) return setFrom(null);
+      const f = alignFromForTab(v.startOf("day"), tab);
+      setFrom(f);
+      setTo(computeTo(f, tab));
+    },
+    [tab, alignFromForTab, computeTo]
+  );
+  const handleToChange = React.useCallback(
+    (v: Dayjs | null) => {
+      if (!v) return setTo(null);
+      const t = v.startOf("day");
+      setTo(from && t.isBefore(from, "day") ? from : t);
+    },
+    [from]
+  );
+
   // Filters
-  const [date, setDate] = React.useState<Dayjs | null>(dayjs());
-  const [timePreset, setTimePreset] = React.useState<TimePreset>("all");
-  const [customStart, setCustomStart] = React.useState("08:00");
-  const [customEnd, setCustomEnd] = React.useState("17:00");
   const [q, setQ] = React.useState("");
+  const [hourStart, setHourStart] = React.useState("08:00");
+  const [hourEnd, setHourEnd] = React.useState("20:00");
 
-  // Data (รายวันสำหรับตารางเดิม)
+  // Data
   const [loading, setLoading] = React.useState(false);
-  const [rowsCheckedIn, setRowsCheckedIn] = React.useState<BookingView[]>([]);
-  const [allFiltered, setAllFiltered] = React.useState<BookingView[]>([]);
-
-  // Data (รายสัปดาห์สำหรับตาราง)
-  const [weekRowsCheckedIn, setWeekRowsCheckedIn] = React.useState<
-    BookingView[]
-  >([]);
-
+  const [rows, setRows] = React.useState<BookingRow[]>([]);
   const [toast, setToast] = React.useState<{
     open: boolean;
     msg: string;
     sev: "success" | "error" | "info";
-  }>({ open: false, msg: "", sev: "success" });
-
-  // Pagination
-  const [page, setPage] = React.useState(0);
-  const [rowsPerPage, setRowsPerPage] = React.useState(10);
-
-  // Tabs (Chart mode)
-  const [chartTab, setChartTab] = React.useState<0 | 1>(0); // 0: Day, 1: Week
-  const [chartLoading, setChartLoading] = React.useState(false);
-
-  // Summary (ใช้แสดงใน Overview)
-  const [summary, setSummary] = React.useState<Summary>({
-    totalBookings: 0,
-    checkedIn: 0,
-    pending: 0,
-    uniqueSupAll: 0,
-    uniqueSupChecked: 0,
-    completion: 0,
+  }>({
+    open: false,
+    msg: "",
+    sev: "success",
   });
 
-  // Derived
-  const dateISO = React.useMemo(
-    () => (date ? date.format("YYYY-MM-DD") : dayjs().format("YYYY-MM-DD")),
-    [date]
-  );
-  const windowRange = React.useMemo(() => {
-    if (timePreset === "all") return { s: "00:00", e: "23:59" };
-    if (timePreset === "am") return { s: "08:00", e: "12:00" };
-    if (timePreset === "pm") return { s: "12:00", e: "17:00" };
-    return { s: customStart, e: customEnd };
-  }, [timePreset, customStart, customEnd]);
+  const bookingsTotal = rows.length;
+  const inProgress = rows.filter((r) => {
+    const out = isTrailer(r.truckType)
+      ? r.weightOutHead != null || r.weightOutTrailer != null
+      : r.weightOut != null;
+    return !!r.checkInTime && !out;
+  }).length;
 
-  /* ---------- โหลดตาราง: รายวัน ---------- */
-  const load = React.useCallback(async () => {
+  // Fetch
+  async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
+    const res = await fetch(url, { cache: "no-store", ...init });
+    const txt = await res.text().catch(() => "");
+    if (!res.ok) throw new Error(txt || `HTTP ${res.status}`);
+    return txt ? (JSON.parse(txt) as T) : ({} as T);
+  }
+  const loadRange = React.useCallback(async () => {
+    if (!from || !to) return;
     setLoading(true);
     try {
-      const events = await fetchJSON<any[]>(EVENTS_API(dateISO));
-      const all = (events || []).map(normalizeFromEvent);
-
-      const inWindow =
-        timePreset === "all"
-          ? all
-          : all.filter(
-              (r) =>
-                r.startTime &&
-                r.startTime >= windowRange.s &&
-                r.startTime <= windowRange.e
-            );
-
-      const term = q.trim().toLowerCase();
-      const filtered = term
-        ? inWindow.filter(
-            (r) =>
-              r.bookingCode?.toLowerCase().includes(term) ||
-              r.supplierName?.toLowerCase().includes(term) ||
-              r.supCode?.toLowerCase().includes(term) ||
-              r.truckRegister?.toLowerCase().includes(term)
-          )
-        : inWindow;
-
-      const onlyChecked = filtered
-        .filter((r) => !!r.checkInTime)
-        .sort((a, b) => {
-          const at = a.checkInTime ? +new Date(a.checkInTime) : 0;
-          const bt = b.checkInTime ? +new Date(b.checkInTime) : 0;
-          return bt - at;
-        });
-
-      setAllFiltered(filtered);
-      setRowsCheckedIn(onlyChecked);
-      setPage(0);
-
-      // สรุปรายวันสำหรับ Overview เมื่ออยู่แท็บ Day
-      const dayTotal = filtered.length;
-      const dayChecked = onlyChecked.length;
-      const dayUniqueAll = new Set(
-        filtered.map((r) => `${r.supCode}|${r.supplierName}`)
-      ).size;
-      const dayUniqueChecked = new Set(
-        onlyChecked.map((r) => `${r.supCode}|${r.supplierName}`)
-      ).size;
-
-      setSummary({
-        totalBookings: dayTotal,
-        checkedIn: dayChecked,
-        pending: Math.max(0, dayTotal - dayChecked),
-        uniqueSupAll: dayUniqueAll,
-        uniqueSupChecked: dayUniqueChecked,
-        completion: dayTotal ? Math.round((dayChecked / dayTotal) * 100) : 0,
-      });
-    } catch (e: any) {
-      setToast({
-        open: true,
-        msg: e?.message || "โหลดไม่สำเร็จ",
-        sev: "error",
-      });
-      setAllFiltered([]);
-      setRowsCheckedIn([]);
-    } finally {
-      setLoading(false);
-    }
-  }, [dateISO, timePreset, windowRange.s, windowRange.e, q]);
-
-  React.useEffect(() => {
-    const t = setTimeout(() => {
-      if (chartTab === 0) load();
-    }, 200);
-    return () => clearTimeout(t);
-  }, [load, chartTab]);
-
-  /* ---------- โหลดตาราง: รายสัปดาห์ ---------- */
-  const loadWeekTable = React.useCallback(async () => {
-    setLoading(true);
-    try {
-      const base = dayjs(dateISO);
-      const startOfWeek = base.startOf("week").add(1, "day"); // จันทร์
-      const weekDays = _.range(0, 7).map((i) => startOfWeek.add(i, "day"));
-
-      const allRows: BookingView[] = [];
-      for (const d of weekDays) {
+      const start = from.startOf("day");
+      const end = to.startOf("day");
+      const days = end.diff(start, "day");
+      const all: BookingRow[] = [];
+      for (let i = 0; i <= days; i++) {
+        const d = start.add(i, "day");
         const ev = await fetchJSON<any[]>(EVENTS_API(d.format("YYYY-MM-DD")));
-        allRows.push(...(ev || []).map(normalizeFromEvent));
+        all.push(...(ev || []).map(normalizeFromEvent));
       }
-
-      // ค้นหาด้วย q เช่นเดิม
       const term = q.trim().toLowerCase();
-      const filtered = term
-        ? allRows.filter(
-            (r) =>
-              r.bookingCode?.toLowerCase().includes(term) ||
-              r.supplierName?.toLowerCase().includes(term) ||
-              r.supCode?.toLowerCase().includes(term) ||
-              r.truckRegister?.toLowerCase().includes(term)
-          )
-        : allRows;
-
-      const onlyChecked = filtered
-        .filter((r) => !!r.checkInTime)
-        .sort((a, b) => {
-          const at = a.checkInTime ? +new Date(a.checkInTime) : 0;
-          const bt = b.checkInTime ? +new Date(b.checkInTime) : 0;
-          return bt - at;
-        });
-
-      setWeekRowsCheckedIn(onlyChecked);
-      setPage(0);
+      setRows(
+        term
+          ? all.filter(
+              (r) =>
+                r.bookingCode?.toLowerCase().includes(term) ||
+                r.supplierName?.toLowerCase().includes(term) ||
+                r.supCode?.toLowerCase().includes(term) ||
+                r.truckRegister?.toLowerCase().includes(term)
+            )
+          : all
+      );
     } catch (e: any) {
+      setRows([]);
       setToast({
         open: true,
-        msg: e?.message || "โหลดสัปดาห์ไม่สำเร็จ",
+        msg: e?.message || "โหลดข้อมูลไม่สำเร็จ",
         sev: "error",
       });
-      setWeekRowsCheckedIn([]);
     } finally {
       setLoading(false);
     }
-  }, [dateISO, q]);
+  }, [from, to, q]);
 
-  // เมื่อสลับเป็น Week หรือเปลี่ยนวันที่/ค้นหา ให้โหลดตารางสัปดาห์
   React.useEffect(() => {
-    if (chartTab === 1) {
-      const t = setTimeout(loadWeekTable, 200);
-      return () => clearTimeout(t);
-    }
-  }, [chartTab, dateISO, q, loadWeekTable]);
+    const t = setTimeout(loadRange, 120);
+    return () => clearTimeout(t);
+  }, [loadRange]);
+  React.useEffect(() => {
+    const t = setTimeout(loadRange, 10);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab]);
 
-  /* ---------- Chart helpers ---------- */
-  const hourLabels = React.useMemo(
-    () =>
-      Array.from(
-        { length: H_LEN },
-        (_, i) => `${String(H_START + i).padStart(2, "0")}:00`
-      ),
-    []
-  );
-  function checkedCountByHour(rows: BookingView[]) {
-    const vals = Array(H_LEN).fill(0);
+  /* ----------------- Aggregation (stacked) ----------------- */
+  const hourLabels = React.useMemo(() => {
+    const sH = parseInt(hourStart.slice(0, 2), 10);
+    const eH = parseInt(hourEnd.slice(0, 2), 10);
+    const list: string[] = [];
+    for (let h = sH; h <= eH; h++)
+      list.push(`${String(h).padStart(2, "0")}:00`);
+    return list;
+  }, [hourStart, hourEnd]);
+  const weekLabels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+  const dayIndexMonSun = (d: Dayjs) => (d.day() === 0 ? 6 : d.day() - 1);
+  const monthLabels = React.useMemo(() => {
+    if (!from) return [];
+    const s = from.startOf("month");
+    const e = s.endOf("month");
+    const n = e.diff(s, "day") + 1;
+    return Array.from({ length: n }, (_, i) => String(i + 1));
+  }, [from]);
+
+  type Series = {
+    name: string;
+    data: number[];
+    type?: "line";
+    color?: string;
+    showInLegend?: boolean;
+  };
+  const { chartLabels, seriesForChart, typeOrder } = React.useMemo(() => {
+    const labels =
+      tab === 0 ? hourLabels : tab === 1 ? weekLabels : monthLabels;
+    const len = labels.length;
+
+    const byType = new Map<string, number[]>();
+    const ensure = (name: string) => {
+      const k = (name || "—").trim();
+      if (!byType.has(k)) byType.set(k, Array(len).fill(0));
+      return byType.get(k)!;
+    };
+
     for (const r of rows) {
-      if (!r.checkInTime) continue;
-      const h = dayjs(r.checkInTime).hour();
-      if (h < H_START || h > H_END) continue;
-      vals[h - H_START]++;
-    }
-    return vals;
-  }
-  const labelsMonSun = () => ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-  function dayIndexMonSun(d: Dayjs) {
-    const js = d.day();
-    return js === 0 ? 6 : js - 1;
-  }
+      const name = (r.rubberTypeName || "—").trim();
+      const w = rowUseWeight(r);
+      if (w <= 0) continue;
+      const cin = r.checkInTime ? dayjs(r.checkInTime) : null;
+      if (!cin) continue;
 
-  /* ---------- Chart state ---------- */
-  const [chartLabels, setChartLabels] = React.useState<string[]>(hourLabels);
-  const [chartSeries, setChartSeries] = React.useState<any[]>([
-    { name: "Checked-in (line)", type: "line", data: Array(H_LEN).fill(0) },
-    { name: "Checked-in (bar)", type: "column", data: Array(H_LEN).fill(0) },
-  ]);
+      let idx = -1;
+      if (tab === 0) {
+        const hh = `${String(cin.hour()).padStart(2, "0")}:00`;
+        idx = hourLabels.indexOf(hh);
+      } else if (tab === 1) {
+        idx = dayIndexMonSun(cin);
+      } else {
+        idx = cin.date() - 1;
+      }
+      if (idx < 0 || idx >= len) continue;
+      ensure(name)[idx] += w;
+    }
+
+    const order = Array.from(byType.entries())
+      .map(([name, data]) => ({ name, sum: data.reduce((s, v) => s + v, 0) }))
+      .sort((a, b) => b.sum - a.sum)
+      .map((x) => x.name);
+
+    const stacked: Series[] = order.map((name) => ({
+      name,
+      data: byType.get(name)!,
+    }));
+
+    // รวมยอดต่อ bucket
+    const totals = Array(len).fill(0);
+    for (let i = 0; i < len; i++) {
+      let s = 0;
+      order.forEach((name) => (s += byType.get(name)![i]));
+      totals[i] = s;
+    }
+
+    // === ซีรีส์เส้นโปร่งใสสำหรับแปะ "ตัวเลขรวมเหนือแท่ง" ===
+    const totalLabelSeries: Series = {
+      name: "__totals__",
+      type: "line",
+      data: totals,
+      color: "transparent",
+      showInLegend: false,
+    };
+
+    return {
+      chartLabels: labels,
+      seriesForChart: [...stacked, totalLabelSeries],
+      typeOrder: order,
+    };
+  }, [rows, tab, hourLabels, weekLabels, monthLabels]);
+
+  /* ---------------- Chart options ---------------- */
+  const totalLabelSeriesIndex = Math.max(0, seriesForChart.length - 1);
 
   const chartOptions: ApexOptions = React.useMemo(
     () => ({
       chart: {
+        type: "bar",
+        stacked: true,
+        height: "100%",
+        toolbar: { show: false },
         fontFamily: "inherit",
         foreColor: "inherit",
-        height: "100%",
-        type: "line",
-        toolbar: { show: false },
-        zoom: { enabled: false },
+        animations: { enabled: true },
       },
-      colors: [theme.palette.primary.main, theme.palette.secondary.main],
-      labels: chartLabels,
+      plotOptions: {
+        bar: {
+          columnWidth: tab === 0 ? "55%" : "45%",
+        },
+      },
+      // แสดง label เฉพาะซีรีส์ __totals__ (เส้นโปร่งใส) → จะลอยเหนือยอดแท่งเสมอ
       dataLabels: {
         enabled: true,
-        enabledOnSeries: [0],
-        background: { borderWidth: 0 },
+        enabledOnSeries: [totalLabelSeriesIndex],
+        formatter: (val: number) => (val ? val.toLocaleString() : ""),
+        offsetY: -22,
+        style: { colors: [theme.palette.text.primary], fontWeight: "800" },
+        background: { enabled: false },
       },
+      stroke: {
+        show: true,
+        width: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], // เส้นของ line ซ่อนไว้
+      },
+      markers: { size: 0 }, // ไม่ให้เห็นจุดของซีรีส์เส้น
       grid: { borderColor: theme.palette.divider },
-      legend: { show: false },
-      plotOptions: { bar: { columnWidth: "50%" } },
-      states: { hover: { filter: { type: "darken" } } },
-      stroke: { width: [3, 0], curve: "straight" },
-      markers: { size: 4, strokeWidth: 2, strokeColors: "#fff" },
-      tooltip: { followCursor: true, theme: theme.palette.mode },
       xaxis: {
+        categories: chartLabels,
         axisBorder: { show: false },
-        axisTicks: { color: theme.palette.divider },
         labels: { style: { colors: theme.palette.text.secondary } },
-        tooltip: { enabled: false },
       },
       yaxis: {
+        title: { text: "Total Net (kg)" },
         labels: { style: { colors: theme.palette.text.secondary } },
       },
+      tooltip: {
+        theme: theme.palette.mode,
+        shared: true,
+        intersect: false, // สำคัญ: เปิด shared ต้องปิด intersect
+        y: { formatter: (v) => (v ? v.toLocaleString() + " kg" : "0 kg") },
+      },
+      // ให้สีสดใสตามชนิด (ไม่รวมซีรีส์ totals ที่โปร่งใส)
+      colors: seriesForChart.slice(0, -1).map((s) => colorForType(s.name)),
+      legend: {
+        show: true,
+        formatter: (name) => (name === "__totals__" ? "" : name),
+      },
     }),
-    [theme, chartLabels]
+    [theme, chartLabels, tab, seriesForChart, totalLabelSeriesIndex]
   );
 
-  /* ---------- โหลดกราฟ + อัปเดตสรุปสัปดาห์ ---------- */
-  const loadChart = React.useCallback(async () => {
-    try {
-      setChartLoading(true);
+  const headerRangeText =
+    from && to
+      ? `${from.format("DD-MMM-YYYY")} → ${to.format("DD-MMM-YYYY")}`
+      : "";
 
-      if (chartTab === 0) {
-        const events = await fetchJSON<any[]>(EVENTS_API(dateISO));
-        const rows = (events || []).map(normalizeFromEvent);
-        const checked = checkedCountByHour(rows);
-
-        setChartLabels(hourLabels);
-        setChartSeries([
-          { name: "Checked-in (line)", type: "line", data: checked },
-          { name: "Checked-in (bar)", type: "column", data: checked },
-        ]);
-      } else {
-        const base = dayjs(dateISO);
-        const startOfWeek = base.startOf("week").add(1, "day"); // Mon
-        const weekDays = _.range(0, 7).map((i) => startOfWeek.add(i, "day"));
-
-        const allRows: BookingView[] = [];
-        for (const d of weekDays) {
-          const ev = await fetchJSON<any[]>(EVENTS_API(d.format("YYYY-MM-DD")));
-          allRows.push(...(ev || []).map(normalizeFromEvent));
-        }
-        const counts = Array(7).fill(0);
-        for (const r of allRows) {
-          if (!r.checkInTime) continue;
-          const idx = dayIndexMonSun(dayjs(r.checkInTime));
-          counts[idx]++;
-        }
-
-        setChartLabels(labelsMonSun());
-        setChartSeries([
-          { name: "Checked-in (line)", type: "line", data: counts },
-          { name: "Checked-in (bar)", type: "column", data: counts },
-        ]);
-
-        // สรุปสัปดาห์ (Overview)
-        const weekTotal = allRows.length;
-        const weekCheckedRows = allRows.filter((r) => !!r.checkInTime);
-        const weekChecked = weekCheckedRows.length;
-        const weekUniqueAll = new Set(
-          allRows.map((r) => `${r.supCode}|${r.supplierName}`)
-        ).size;
-        const weekUniqueChecked = new Set(
-          weekCheckedRows.map((r) => `${r.supCode}|${r.supplierName}`)
-        ).size;
-
-        setSummary({
-          totalBookings: weekTotal,
-          checkedIn: weekChecked,
-          pending: Math.max(0, weekTotal - weekChecked),
-          uniqueSupAll: weekUniqueAll,
-          uniqueSupChecked: weekUniqueChecked,
-          completion: weekTotal
-            ? Math.round((weekChecked / weekTotal) * 100)
-            : 0,
-        });
-      }
-    } catch {
-      if (chartTab === 0) {
-        setChartLabels(hourLabels);
-        setChartSeries([
-          {
-            name: "Checked-in (line)",
-            type: "line",
-            data: Array(H_LEN).fill(0),
-          },
-          {
-            name: "Checked-in (bar)",
-            type: "column",
-            data: Array(H_LEN).fill(0),
-          },
-        ]);
-      } else {
-        setChartLabels(labelsMonSun());
-        setChartSeries([
-          { name: "Checked-in (line)", type: "line", data: Array(7).fill(0) },
-          { name: "Checked-in (bar)", type: "column", data: Array(7).fill(0) },
-        ]);
-      }
-    } finally {
-      setChartLoading(false);
-    }
-  }, [chartTab, dateISO, hourLabels]);
-
-  React.useEffect(() => {
-    loadChart();
-  }, [loadChart]);
-
-  // เมื่อสลับกลับ Day ให้สรุปมาจากข้อมูลรายวัน
-  React.useEffect(() => {
-    if (chartTab === 0) {
-      const dayTotal = allFiltered.length;
-      const dayChecked = rowsCheckedIn.length;
-      const dayUniqueAll = new Set(
-        allFiltered.map((r) => `${r.supCode}|${r.supplierName}`)
-      ).size;
-      const dayUniqueChecked = new Set(
-        rowsCheckedIn.map((r) => `${r.supCode}|${r.supplierName}`)
-      ).size;
-
-      setSummary({
-        totalBookings: dayTotal,
-        checkedIn: dayChecked,
-        pending: Math.max(0, dayTotal - dayChecked),
-        uniqueSupAll: dayUniqueAll,
-        uniqueSupChecked: dayUniqueChecked,
-        completion: dayTotal ? Math.round((dayChecked / dayTotal) * 100) : 0,
-      });
-    }
-  }, [chartTab, allFiltered, rowsCheckedIn]);
-
-  /* ---------- ตาราง: ใช้แหล่งข้อมูลตามแท็บ ---------- */
-  const tableRows = chartTab === 0 ? rowsCheckedIn : weekRowsCheckedIn;
-
-  const paged = React.useMemo(() => {
-    const start = page * rowsPerPage;
-    return tableRows.slice(start, start + rowsPerPage);
-  }, [tableRows, page, rowsPerPage]);
-
-  /* ---------- UI: ใช้ FusePageSimple แบบหน้า Example ---------- */
+  /* ===================== UI ===================== */
   return (
     <LocalizationProvider dateAdapter={AdapterDayjs}>
       <FusePageSimple
@@ -537,16 +440,10 @@ export default function CheckInHistoryPage() {
           <Box className="p-6">
             <Stack direction="row" alignItems="center" spacing={1}>
               <Typography variant="h5" fontWeight={800}>
-                Summary of Checked-in
+                Summary of Received Rubber
               </Typography>
               <Box sx={{ flexGrow: 1 }} />
-              <IconButton
-                onClick={() =>
-                  chartTab === 1 ? (loadWeekTable(), loadChart()) : load()
-                }
-                disabled={loading}
-                title="Refresh"
-              >
+              <IconButton onClick={() => loadRange()} disabled={loading}>
                 <RefreshIcon />
               </IconButton>
             </Stack>
@@ -555,17 +452,29 @@ export default function CheckInHistoryPage() {
         content={
           <Box className="p-6">
             {/* Filters */}
-            <Paper variant="outlined" sx={{ p: 2, borderRadius: 1, mb: 2 }}>
+            <Paper
+              variant="outlined"
+              sx={{ p: 2, borderRadius: 1, mb: 2 }}
+              component={motion.div}
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+            >
               <Stack
                 direction={{ xs: "column", md: "row" }}
                 spacing={1.25}
-                alignItems="flex-end"
+                alignItems={{ xs: "stretch", md: "center" }}
               >
-                <FormControl sx={{ flex: 1 }}>
-                  <FormLabel>Date</FormLabel>
+                <Tabs value={tab} onChange={onChangeTab} sx={{ minHeight: 36 }}>
+                  <Tab label="This Day" value={0} />
+                  <Tab label="This Week" value={1} />
+                  <Tab label="This Month" value={2} />
+                </Tabs>
+                <Box sx={{ flexGrow: 1 }} />
+                <FormControl sx={{ width: 180 }}>
+                  <FormLabel>From</FormLabel>
                   <DatePicker
-                    value={date}
-                    onChange={(v: Dayjs | null) => setDate(v)}
+                    value={from}
+                    onChange={handleFromChange}
                     format="DD-MMM-YYYY"
                     slotProps={{
                       textField: {
@@ -576,33 +485,28 @@ export default function CheckInHistoryPage() {
                     }}
                   />
                 </FormControl>
-
-                <FormControl sx={{ flex: 1 }}>
-                  <FormLabel>Time Range</FormLabel>
-                  <TextField
-                    {...FIELD_PROPS}
-                    sx={fieldSx}
-                    select
-                    value={timePreset}
-                    onChange={(e) =>
-                      setTimePreset(e.target.value as TimePreset)
-                    }
-                  >
-                    <MenuItem value="all">ทั้งวัน (00:00–23:59)</MenuItem>
-                    <MenuItem value="am">ช่วงเช้า (08:00–12:00)</MenuItem>
-                    <MenuItem value="pm">ช่วงบ่าย (12:00–17:00)</MenuItem>
-                    <MenuItem value="custom">กำหนดเอง</MenuItem>
-                  </TextField>
+                <FormControl sx={{ width: 180 }}>
+                  <FormLabel>To</FormLabel>
+                  <DatePicker
+                    value={to}
+                    onChange={handleToChange}
+                    format="DD-MMM-YYYY"
+                    slotProps={{
+                      textField: {
+                        size: "small",
+                        sx: { "& .MuiOutlinedInput-root": { borderRadius: 1 } },
+                      },
+                      popper: { disablePortal: true },
+                    }}
+                  />
                 </FormControl>
-
-                <FormControl sx={{ flex: 2 }}>
+                <FormControl sx={{ minWidth: 260, flex: 1 }}>
                   <FormLabel>Search (Code / Supplier / Plate)</FormLabel>
                   <TextField
-                    {...FIELD_PROPS}
-                    sx={fieldSx}
+                    size="small"
+                    placeholder="เช่น 2025082801 / สมหญิง / 1กก-1234"
                     value={q}
                     onChange={(e) => setQ(e.target.value)}
-                    placeholder="เช่น 2025082801 / สมหญิง / 1กก-1234"
                     InputProps={{
                       startAdornment: (
                         <InputAdornment position="start">
@@ -610,316 +514,210 @@ export default function CheckInHistoryPage() {
                         </InputAdornment>
                       ),
                     }}
+                    sx={{ "& .MuiOutlinedInput-root": { borderRadius: 1 } }}
                   />
                 </FormControl>
-
-                <Box sx={{ flex: 1 }}>
-                  <Button
-                    fullWidth
-                    variant="outlined"
-                    onClick={() =>
-                      chartTab === 1 ? (loadWeekTable(), loadChart()) : load()
-                    }
-                    disabled={loading}
-                    sx={{ borderRadius: 1, height: 33 }}
-                  >
-                    {loading ? "Loading..." : "Load data"}
-                  </Button>
-                </Box>
+                {tab === 0 && (
+                  <Stack direction="row" spacing={1.25} alignItems="center">
+                    <Typography variant="body2" color="text.secondary">
+                      Hour Range
+                    </Typography>
+                    <Select
+                      size="small"
+                      value={hourStart}
+                      onChange={(e) => setHourStart(e.target.value)}
+                    >
+                      {HOUR_CHOICES.map((h) => (
+                        <MenuItem key={h} value={h}>
+                          {h}
+                        </MenuItem>
+                      ))}
+                    </Select>
+                    <Typography variant="body2" color="text.secondary">
+                      to
+                    </Typography>
+                    <Select
+                      size="small"
+                      value={hourEnd}
+                      onChange={(e) => setHourEnd(e.target.value)}
+                    >
+                      {HOUR_CHOICES.map((h) => (
+                        <MenuItem key={h} value={h}>
+                          {h}
+                        </MenuItem>
+                      ))}
+                    </Select>
+                  </Stack>
+                )}
               </Stack>
             </Paper>
 
-            {/* ===== Chart + Overview ===== */}
+            {/* Overview */}
             <Paper
-              sx={{ p: 2.5, borderRadius: RADIUS, mb: 2 }}
+              sx={{ p: 2.5, borderRadius: 1, mb: 2 }}
               variant="outlined"
+              component={motion.div}
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
             >
-              <div className="flex flex-col items-start justify-between sm:flex-row">
-                <Typography className="truncate text-xl leading-6 font-medium tracking-tight">
-                  Booking Summary
-                </Typography>
-                <div className="mt-3 sm:mt-0">
-                  <Tabs
-                    value={chartTab}
-                    onChange={(_e, v: 0 | 1) => setChartTab(v)}
+              <Typography className="font-medium" color="text.secondary">
+                Overview • {headerRangeText}
+              </Typography>
+              <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <Box className="rounded-xl border px-1 py-8 flex flex-col items-center justify-center">
+                  <Typography
+                    className="text-5xl leading-none font-semibold tracking-tight"
+                    color="secondary"
                   >
-                    <Tab label="This Day" value={0} />
-                    <Tab label="This Week" value={1} />
-                  </Tabs>
-                </div>
-              </div>
-
-              <div className="mt-4 grid w-full grid-flow-row grid-cols-1 gap-6 lg:grid-cols-2">
-                {/* Left: chart */}
-                <div className="flex flex-auto flex-col">
-                  <Typography className="font-medium" color="text.secondary">
-                    {chartTab === 0
-                      ? "Checked-in (hourly · 08:00–20:00)"
-                      : "Checked-in per day (Mon–Sun)"}
+                    {bookingsTotal.toLocaleString()}
                   </Typography>
-
-                  <div className="flex flex-auto flex-col">
-                    {chartLoading ? (
-                      <Box sx={{ height: 320 }}>
-                        <FuseLoading />
-                      </Box>
-                    ) : (
-                      <motion.div
-                        initial={{ opacity: 0, y: 10 }}
-                        animate={{ opacity: 1, y: 0 }}
-                      >
-                        <ReactApexChart
-                          className="w-full flex-auto"
-                          options={chartOptions}
-                          series={chartSeries}
-                          height={320}
-                        />
-                      </motion.div>
-                    )}
-                  </div>
-                </div>
-
-                {/* Right: overview */}
-                <div className="flex flex-col">
-                  <Typography className="font-medium" color="text.secondary">
-                    Overview
+                  <Typography
+                    className="mt-1 text-sm font-medium sm:text-lg"
+                    color="secondary"
+                  >
+                    Bookings (Range)
                   </Typography>
-                  <div className="mt-6 grid flex-auto grid-cols-4 gap-3">
-                    <Box
-                      className="col-span-2 flex flex-col items-center justify-center rounded-xl border px-1 py-8"
-                      sx={{
-                        backgroundColor:
-                          "var(--mui-palette-background-default)",
-                      }}
-                    >
-                      <Typography
-                        className="text-5xl leading-none font-semibold tracking-tight sm:text-7xl"
-                        color="secondary"
-                      >
-                        {summary.checkedIn}
-                      </Typography>
-                      <Typography
-                        className="mt-1 text-sm font-medium sm:text-lg"
-                        color="secondary"
-                      >
-                        Checked-in
-                      </Typography>
-                    </Box>
-
-                    <Box
-                      className="col-span-2 flex flex-col items-center justify-center rounded-xl border px-1 py-8"
-                      sx={{
-                        backgroundColor:
-                          "var(--mui-palette-background-default)",
-                      }}
-                    >
-                      <Typography
-                        className="text-5xl leading-none font-semibold tracking-tight sm:text-7xl"
-                        color="secondary"
-                      >
-                        {summary.totalBookings}
-                      </Typography>
-                      <Typography
-                        className="mt-1 text-sm font-medium sm:text-lg"
-                        color="secondary"
-                      >
-                        Bookings
-                      </Typography>
-                    </Box>
-
-                    <Box
-                      className="col-span-2 sm:col-span-1 flex flex-col items-center justify-center rounded-xl border px-1 py-8"
-                      sx={{
-                        backgroundColor:
-                          "var(--mui-palette-background-default)",
-                      }}
-                    >
-                      <Typography
-                        className="text-5xl leading-none font-semibold tracking-tight"
-                        color="text.secondary"
-                      >
-                        {summary.pending}
-                      </Typography>
-                      <Typography
-                        className="mt-1 text-center text-sm font-medium"
-                        color="text.secondary"
-                      >
-                        Pending
-                      </Typography>
-                    </Box>
-
-                    <Box
-                      className="col-span-2 sm:col-span-1 flex flex-col items-center justify-center rounded-xl border px-1 py-8"
-                      sx={{
-                        backgroundColor:
-                          "var(--mui-palette-background-default)",
-                      }}
-                    >
-                      <Typography
-                        className="text-5xl leading-none font-semibold tracking-tight"
-                        color="text.secondary"
-                      >
-                        {summary.uniqueSupAll}
-                      </Typography>
-                      <Typography
-                        className="mt-1 text-center text-sm font-medium"
-                        color="text.secondary"
-                      >
-                        Suppliers
-                      </Typography>
-                    </Box>
-
-                    <Box
-                      className="col-span-2 sm:col-span-1 flex flex-col items-center justify-center rounded-xl border px-1 py-8"
-                      sx={{
-                        backgroundColor:
-                          "var(--mui-palette-background-default)",
-                      }}
-                    >
-                      <Typography
-                        className="text-5xl leading-none font-semibold tracking-tight"
-                        color="text.secondary"
-                      >
-                        {summary.uniqueSupChecked}
-                      </Typography>
-                      <Typography
-                        className="mt-1 text-center text-sm font-medium"
-                        color="text.secondary"
-                      >
-                        Sup. Checked
-                      </Typography>
-                    </Box>
-
-                    <Box
-                      className="col-span-2 sm:col-span-1 flex flex-col items-center justify-center rounded-xl border px-1 py-8"
-                      sx={{
-                        backgroundColor:
-                          "var(--mui-palette-background-default)",
-                      }}
-                    >
-                      <Typography
-                        className="text-5xl leading-none font-semibold tracking-tight"
-                        color="text.secondary"
-                      >
-                        {summary.completion}%
-                      </Typography>
-                      <Typography
-                        className="mt-1 text-center text-sm font-medium"
-                        color="text.secondary"
-                      >
-                        Completion
-                      </Typography>
-                    </Box>
-                  </div>
-                </div>
+                </Box>
+                <Box className="rounded-xl border px-1 py-8 flex flex-col items-center justify-center">
+                  <Typography
+                    className="text-5xl leading-none font-semibold tracking-tight"
+                    color="primary"
+                  >
+                    {inProgress.toLocaleString()}
+                  </Typography>
+                  <Typography
+                    className="mt-1 text-sm font-medium sm:text-lg"
+                    color="primary"
+                  >
+                    In Progress
+                  </Typography>
+                </Box>
               </div>
             </Paper>
 
-            {/* หมายเหตุ (ใช้ summary) */}
-            <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-              แสดงเฉพาะรายการที่<strong>เช็คอินแล้ว</strong> {summary.checkedIn}{" "}
-              จาก {summary.totalBookings} รายการ
-            </Typography>
+            {/* Charts */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-12 items-start">
+              <div>
+                <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                  {tab === 0
+                    ? "Total Net by hour (abs(Out − In))"
+                    : tab === 1
+                      ? "Total Net by day (Mon–Sun)"
+                      : "Total Net by day (this month)"}
+                </Typography>
+                <Paper variant="outlined" sx={{ borderRadius: 1, p: 1 }}>
+                  {loading ? (
+                    <Box sx={{ height: 340 }}>
+                      <FuseLoading />
+                    </Box>
+                  ) : (
+                    <ReactApexChart
+                      options={chartOptions}
+                      series={seriesForChart}
+                      type="bar"
+                      height={340}
+                    />
+                  )}
+                </Paper>
+              </div>
 
-            {/* ตาราง: แสดงตามแท็บที่เลือก */}
-            <Paper variant="outlined" sx={{ borderRadius: RADIUS }}>
-              <TableContainer>
-                <Table size="small" stickyHeader>
-                  <TableHead>
-                    <TableRow>
-                      <TableCell align="center">No.</TableCell>
-                      <TableCell>Check In</TableCell>
-                      <TableCell>Booking Code</TableCell>
-                      <TableCell align="center">Queue</TableCell>
-                      <TableCell>Time Slot</TableCell>
-                      <TableCell>Supplier</TableCell>
-                      <TableCell>License Plate</TableCell>
-                      <TableCell>Truck Type</TableCell>
-                      <TableCell>Rubber Type</TableCell>
-                    </TableRow>
-                  </TableHead>
+              {/* Right: Rubber types summary */}
+              <div>
+                <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                  Rubber Types (weight & share)
+                </Typography>
+                <Paper variant="outlined" sx={{ borderRadius: 1, p: 2 }}>
+                  <Stack spacing={1.25}>
+                    {(() => {
+                      const byType = new Map<string, number>();
+                      for (const r of rows) {
+                        const name = (r.rubberTypeName || "—").trim();
+                        const w = rowUseWeight(r);
+                        if (w <= 0) continue;
+                        byType.set(name, (byType.get(name) || 0) + w);
+                      }
+                      const list = Array.from(byType.entries())
+                        .map(([name, weight]) => ({ name, weight }))
+                        .sort((a, b) => b.weight - a.weight);
+                      const total = list.reduce((s, x) => s + x.weight, 0);
 
-                  <TableBody>
-                    {paged.map((r, idx) => (
-                      <TableRow key={r.id || r.bookingCode} hover>
-                        <TableCell align="center">
-                          {page * rowsPerPage + idx + 1}.
-                        </TableCell>
-
-                        <TableCell>
-                          <Chip
-                            size="small"
-                            label={
-                              r.checkInTime
-                                ? dayjs(r.checkInTime).format("HH:mm")
-                                : "-"
-                            }
-                            variant="outlined"
-                            sx={{
-                              borderColor: "black",
-                              color: "black",
-                              bgcolor: "white",
-                              fontWeight: 600,
-                            }}
-                          />
-                        </TableCell>
-
-                        <TableCell>{r.bookingCode}</TableCell>
-                        <TableCell align="center">
-                          {r.sequence ?? "-"}
-                        </TableCell>
-
-                        <TableCell>
-                          {r.startTime}
-                          {r.endTime ? ` - ${r.endTime}` : ""}
-                        </TableCell>
-
-                        <TableCell sx={{ maxWidth: 320 }}>
-                          <Typography
-                            variant="body2"
-                            noWrap
-                            title={`${r.supCode} : ${r.supplierName}`}
+                      return (
+                        <>
+                          {list.map((it) => {
+                            const pct = total
+                              ? Math.round((it.weight / total) * 100)
+                              : 0;
+                            const barColor = colorForType(it.name);
+                            return (
+                              <Box key={it.name}>
+                                <Stack
+                                  direction="row"
+                                  alignItems="center"
+                                  spacing={1}
+                                  sx={{ mb: 0.5 }}
+                                >
+                                  <Chip
+                                    size="small"
+                                    label={it.name || "—"}
+                                    sx={{
+                                      bgcolor: barColor,
+                                      color: "#fff",
+                                      fontWeight: 700,
+                                    }}
+                                  />
+                                  <Typography
+                                    variant="body2"
+                                    color="text.secondary"
+                                  >
+                                    {fmt(it.weight)} kg
+                                  </Typography>
+                                  <Box sx={{ flexGrow: 1 }} />
+                                  <Typography
+                                    variant="body2"
+                                    color="text.secondary"
+                                  >
+                                    {pct}%
+                                  </Typography>
+                                </Stack>
+                                <Box
+                                  sx={{
+                                    height: 8,
+                                    borderRadius: 5,
+                                    bgcolor: "divider",
+                                    overflow: "hidden",
+                                  }}
+                                >
+                                  <Box
+                                    sx={{
+                                      width: `${pct}%`,
+                                      height: "100%",
+                                      bgcolor: barColor,
+                                    }}
+                                  />
+                                </Box>
+                              </Box>
+                            );
+                          })}
+                          <Stack
+                            direction="row"
+                            alignItems="center"
+                            justifyContent="space-between"
+                            sx={{ mt: 1 }}
                           >
-                            {r.supCode} : {r.supplierName}
-                          </Typography>
-                        </TableCell>
-
-                        <TableCell>{r.truckRegister || "-"}</TableCell>
-                        <TableCell>{r.truckType || "-"}</TableCell>
-
-                        <TableCell>
-                          {r.rubberTypeName ? (
-                            <Chip
-                              size="small"
-                              label={r.rubberTypeName}
-                              sx={rubberChipSx(r.rubberTypeName)}
-                            />
-                          ) : (
-                            "-"
-                          )}
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-
-                  <TableFooter>
-                    <TableRow>
-                      <TablePagination
-                        count={tableRows.length}
-                        page={page}
-                        onPageChange={(_, p) => setPage(p)}
-                        rowsPerPage={rowsPerPage}
-                        onRowsPerPageChange={(e) => {
-                          setRowsPerPage(parseInt(e.target.value, 10));
-                          setPage(0);
-                        }}
-                        rowsPerPageOptions={[10, 20, 50, 100]}
-                      />
-                    </TableRow>
-                  </TableFooter>
-                </Table>
-              </TableContainer>
-            </Paper>
+                            <Typography variant="body2" fontWeight={700}>
+                              Total
+                            </Typography>
+                            <Typography variant="body2" fontWeight={700}>
+                              {fmt(total)} kg
+                            </Typography>
+                          </Stack>
+                        </>
+                      );
+                    })()}
+                  </Stack>
+                </Paper>
+              </div>
+            </div>
 
             {/* Toast */}
             <Snackbar
