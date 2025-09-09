@@ -14,6 +14,7 @@ import {
   Alert,
   Box,
   Chip,
+  Divider,
   FormControl,
   FormLabel,
   IconButton,
@@ -21,9 +22,16 @@ import {
   MenuItem,
   Paper,
   Select,
+  Skeleton,
   Snackbar,
   Stack,
   Tab,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
   Tabs,
   TextField,
   Typography,
@@ -44,7 +52,7 @@ const api = (p: string) => `${API_BASE}${p.startsWith("/") ? p : `/${p}`}`;
 const EVENTS_API = (dateISO: string) =>
   api(`/api/bookings/events?date=${encodeURIComponent(dateISO)}`);
 
-/* ===== สีโทนสดใส (ปรับได้ง่าย ๆ) ===== */
+/* ===== สีโทนสดใส (ปรับได้ง่าย) ===== */
 const VIBRANT_PALETTE = [
   "#00C853",
   "#2979FF",
@@ -68,13 +76,13 @@ const NAMED_COLORS: Record<string, string> = {
   uss: "#00B8D4",
   "cup lump": "#FF1744",
 };
-function colorForType(name: string): string {
+const colorForType = (name: string) => {
   const key = (name || "").trim().toLowerCase();
   if (NAMED_COLORS[key]) return NAMED_COLORS[key];
   let h = 0;
   for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) >>> 0;
   return VIBRANT_PALETTE[h % VIBRANT_PALETTE.length];
-}
+};
 
 /* =============== Types & utils =============== */
 type BookingRow = {
@@ -103,7 +111,9 @@ const HOUR_CHOICES = Array.from(
   { length: 24 },
   (_, h) => `${String(h).padStart(2, "0")}:00`
 );
-const fmt = (n?: number | null) => (n == null ? "-" : n.toLocaleString());
+const fmtNum = (n?: number | null) => (n == null ? "-" : n.toLocaleString());
+const supplierText = (r: BookingRow) =>
+  [r.supCode || "-", r.supplierName || ""].filter(Boolean).join(" : ");
 
 function normalizeFromEvent(raw: any): BookingRow {
   const xp = raw?.extendedProps ?? {};
@@ -128,9 +138,11 @@ function normalizeFromEvent(raw: any): BookingRow {
     truckType: xp.truck_type ?? xp.truck_type_name ?? "",
     rubberTypeName: xp.rubber_type_name ?? xp.rubber_type ?? "",
     checkInTime: xp.check_in_time ?? null,
+
     weightIn: xp.weight_in ?? null,
     weightInHead: xp.weight_in_head ?? null,
     weightInTrailer: xp.weight_in_trailer ?? null,
+
     weightOut: xp.weight_out ?? null,
     weightOutHead: xp.weight_out_head ?? null,
     weightOutTrailer: xp.weight_out_trailer ?? null,
@@ -139,16 +151,22 @@ function normalizeFromEvent(raw: any): BookingRow {
 const isTrailer = (tt?: string) =>
   (tt || "").toLowerCase().includes("พ่วง") ||
   (tt || "").toLowerCase().includes("trailer");
+
 const rowInSum = (r: BookingRow) =>
   isTrailer(r.truckType)
     ? (r.weightInHead ?? 0) + (r.weightInTrailer ?? 0)
     : (r.weightIn ?? 0);
+
 const rowOutSum = (r: BookingRow) =>
   isTrailer(r.truckType)
     ? (r.weightOutHead ?? 0) + (r.weightOutTrailer ?? 0)
     : (r.weightOut ?? 0);
-/** น้ำหนักสำหรับกราฟ/สัดส่วน: มี Out ใช้ Out ไม่งั้นใช้ In */
+
+/** สำหรับกราฟ/สัดส่วน: มี Out ใช้ Out ไม่งั้นใช้ In */
 const rowUseWeight = (r: BookingRow) => rowOutSum(r) || rowInSum(r) || 0;
+/** Net แบบ |Out − In| */
+const rowAbsNet = (r: BookingRow) =>
+  Math.abs((rowOutSum(r) || 0) - (rowInSum(r) || 0));
 
 /* ================= Page ================= */
 export default function DashboardSummaryPage() {
@@ -171,9 +189,12 @@ export default function DashboardSummaryPage() {
     return baseFrom.endOf("month").startOf("day");
   }, []);
 
+  // ✅ เมื่อกลับมาที่ This Day ให้ยึด "วันนี้" เสมอ
   const onChangeTab = (_: any, v: RangeTab) => {
     setTab(v);
-    const nf = alignFromForTab(todayRef.current, v);
+    const baseForAlign =
+      v === 0 ? todayRef.current : (from ?? todayRef.current);
+    const nf = alignFromForTab(baseForAlign, v);
     setFrom(nf);
     setTo(computeTo(nf, v));
   };
@@ -208,12 +229,9 @@ export default function DashboardSummaryPage() {
     open: boolean;
     msg: string;
     sev: "success" | "error" | "info";
-  }>({
-    open: false,
-    msg: "",
-    sev: "success",
-  });
+  }>({ open: false, msg: "", sev: "success" });
 
+  // ===== KPIs =====
   const bookingsTotal = rows.length;
   const inProgress = rows.filter((r) => {
     const out = isTrailer(r.truckType)
@@ -302,7 +320,7 @@ export default function DashboardSummaryPage() {
     color?: string;
     showInLegend?: boolean;
   };
-  const { chartLabels, seriesForChart, typeOrder } = React.useMemo(() => {
+  const { chartLabels, seriesForChart } = React.useMemo(() => {
     const labels =
       tab === 0 ? hourLabels : tab === 1 ? weekLabels : monthLabels;
     const len = labels.length;
@@ -344,15 +362,13 @@ export default function DashboardSummaryPage() {
       data: byType.get(name)!,
     }));
 
-    // รวมยอดต่อ bucket
+    // รวมยอดต่อ bucket → ทำ label “ลอยเหนือแท่ง”
     const totals = Array(len).fill(0);
     for (let i = 0; i < len; i++) {
       let s = 0;
       order.forEach((name) => (s += byType.get(name)![i]));
       totals[i] = s;
     }
-
-    // === ซีรีส์เส้นโปร่งใสสำหรับแปะ "ตัวเลขรวมเหนือแท่ง" ===
     const totalLabelSeries: Series = {
       name: "__totals__",
       type: "line",
@@ -364,7 +380,6 @@ export default function DashboardSummaryPage() {
     return {
       chartLabels: labels,
       seriesForChart: [...stacked, totalLabelSeries],
-      typeOrder: order,
     };
   }, [rows, tab, hourLabels, weekLabels, monthLabels]);
 
@@ -382,12 +397,7 @@ export default function DashboardSummaryPage() {
         foreColor: "inherit",
         animations: { enabled: true },
       },
-      plotOptions: {
-        bar: {
-          columnWidth: tab === 0 ? "55%" : "45%",
-        },
-      },
-      // แสดง label เฉพาะซีรีส์ __totals__ (เส้นโปร่งใส) → จะลอยเหนือยอดแท่งเสมอ
+      plotOptions: { bar: { columnWidth: tab === 0 ? "55%" : "45%" } },
       dataLabels: {
         enabled: true,
         enabledOnSeries: [totalLabelSeriesIndex],
@@ -396,11 +406,8 @@ export default function DashboardSummaryPage() {
         style: { colors: [theme.palette.text.primary], fontWeight: "800" },
         background: { enabled: false },
       },
-      stroke: {
-        show: true,
-        width: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], // เส้นของ line ซ่อนไว้
-      },
-      markers: { size: 0 }, // ไม่ให้เห็นจุดของซีรีส์เส้น
+      stroke: { show: true, width: [0] },
+      markers: { size: 0 },
       grid: { borderColor: theme.palette.divider },
       xaxis: {
         categories: chartLabels,
@@ -412,12 +419,11 @@ export default function DashboardSummaryPage() {
         labels: { style: { colors: theme.palette.text.secondary } },
       },
       tooltip: {
-        theme: theme.palette.mode,
         shared: true,
-        intersect: false, // สำคัญ: เปิด shared ต้องปิด intersect
-        y: { formatter: (v) => (v ? v.toLocaleString() + " kg" : "0 kg") },
+        intersect: false,
+        theme: theme.palette.mode,
+        y: { formatter: (v) => (v ? `${v.toLocaleString()} kg` : "0 kg") },
       },
-      // ให้สีสดใสตามชนิด (ไม่รวมซีรีส์ totals ที่โปร่งใส)
       colors: seriesForChart.slice(0, -1).map((s) => colorForType(s.name)),
       legend: {
         show: true,
@@ -440,7 +446,7 @@ export default function DashboardSummaryPage() {
           <Box className="p-6">
             <Stack direction="row" alignItems="center" spacing={1}>
               <Typography variant="h5" fontWeight={800}>
-                Summary of Received Rubber
+                Summary of Received Cuplump
               </Typography>
               <Box sx={{ flexGrow: 1 }} />
               <IconButton onClick={() => loadRange()} disabled={loading}>
@@ -552,7 +558,7 @@ export default function DashboardSummaryPage() {
               </Stack>
             </Paper>
 
-            {/* Overview */}
+            {/* Overview (สั้น) */}
             <Paper
               sx={{ p: 2.5, borderRadius: 1, mb: 2 }}
               variant="outlined"
@@ -566,27 +572,27 @@ export default function DashboardSummaryPage() {
               <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <Box className="rounded-xl border px-1 py-8 flex flex-col items-center justify-center">
                   <Typography
-                    className="text-5xl leading-none font-semibold tracking-tight"
+                    className="text-5xl font-semibold"
                     color="secondary"
                   >
                     {bookingsTotal.toLocaleString()}
                   </Typography>
                   <Typography
-                    className="mt-1 text-sm font-medium sm:text-lg"
+                    className="mt-1 text-sm font-medium"
                     color="secondary"
                   >
-                    Bookings (Range)
+                    Total Bookings
                   </Typography>
                 </Box>
                 <Box className="rounded-xl border px-1 py-8 flex flex-col items-center justify-center">
                   <Typography
-                    className="text-5xl leading-none font-semibold tracking-tight"
+                    className="text-5xl font-semibold"
                     color="primary"
                   >
                     {inProgress.toLocaleString()}
                   </Typography>
                   <Typography
-                    className="mt-1 text-sm font-medium sm:text-lg"
+                    className="mt-1 text-sm font-medium"
                     color="primary"
                   >
                     In Progress
@@ -669,7 +675,7 @@ export default function DashboardSummaryPage() {
                                     variant="body2"
                                     color="text.secondary"
                                   >
-                                    {fmt(it.weight)} kg
+                                    {fmtNum(it.weight)} kg
                                   </Typography>
                                   <Box sx={{ flexGrow: 1 }} />
                                   <Typography
@@ -708,7 +714,7 @@ export default function DashboardSummaryPage() {
                               Total
                             </Typography>
                             <Typography variant="body2" fontWeight={700}>
-                              {fmt(total)} kg
+                              {fmtNum(total)} kg
                             </Typography>
                           </Stack>
                         </>
@@ -718,6 +724,125 @@ export default function DashboardSummaryPage() {
                 </Paper>
               </div>
             </div>
+
+            {/* ===== Table of bookings (ปรับคอลัมน์) ===== */}
+            <Paper
+              sx={{ mt: 4, p: 2, borderRadius: 1 }}
+              variant="outlined"
+              component={motion.div}
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+            >
+              <Typography variant="subtitle2" sx={{ mb: 1.5 }}>
+                Details (range {headerRangeText})
+              </Typography>
+              <TableContainer
+                sx={{
+                  borderRadius: 1,
+                  border: (t) => `1px solid ${t.palette.divider}`,
+                }}
+              >
+                <Table size="small" stickyHeader>
+                  <TableHead>
+                    <TableRow>
+                      <TableCell>Date</TableCell>
+                      <TableCell>Supplier</TableCell>
+                      <TableCell>License Plate</TableCell>
+                      <TableCell>Truck Type</TableCell>
+                      <TableCell>Rubber</TableCell>
+                      <TableCell align="right">Weight In (kg)</TableCell>
+                      <TableCell align="right">Weight Out (kg)</TableCell>
+                      <TableCell align="right">Net |Out−In|</TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {loading ? (
+                      Array.from({ length: 6 }).map((_, i) => (
+                        <TableRow key={`sk-${i}`}>
+                          <TableCell colSpan={8}>
+                            <Skeleton height={24} />
+                          </TableCell>
+                        </TableRow>
+                      ))
+                    ) : rows.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={8} align="center">
+                          <Typography variant="body2" color="text.secondary">
+                            ไม่มีข้อมูลในช่วงที่เลือก
+                          </Typography>
+                        </TableCell>
+                      </TableRow>
+                    ) : (
+                      rows
+                        .slice()
+                        .sort((a, b) =>
+                          a.date === b.date
+                            ? a.startTime.localeCompare(b.startTime)
+                            : a.date.localeCompare(b.date)
+                        )
+                        .map((r) => {
+                          const trailer = isTrailer(r.truckType);
+                          const inText = trailer
+                            ? `${r.weightInHead != null ? r.weightInHead.toLocaleString() : "-"} / ${r.weightInTrailer != null ? r.weightInTrailer.toLocaleString() : "-"}`
+                            : `${fmtNum(r.weightIn)}`;
+                          const outText = trailer
+                            ? `${r.weightOutHead != null ? r.weightOutHead.toLocaleString() : "-"} / ${r.weightOutTrailer != null ? r.weightOutTrailer.toLocaleString() : "-"}`
+                            : `${fmtNum(r.weightOut)}`;
+                          const net = rowAbsNet(r);
+
+                          return (
+                            <TableRow key={r.id || r.bookingCode} hover>
+                              <TableCell>
+                                {dayjs(r.date).format("DD-MMM-YYYY")}
+                              </TableCell>
+                              <TableCell sx={{ maxWidth: 320 }}>
+                                <Typography
+                                  variant="body2"
+                                  noWrap
+                                  title={supplierText(r)}
+                                >
+                                  {supplierText(r)}
+                                </Typography>
+                              </TableCell>
+                              <TableCell>{r.truckRegister || "-"}</TableCell>
+                              <TableCell>{r.truckType || "-"}</TableCell>
+                              <TableCell>
+                                {r.rubberTypeName ? (
+                                  <Chip
+                                    size="small"
+                                    label={r.rubberTypeName}
+                                    sx={{
+                                      bgcolor: colorForType(r.rubberTypeName),
+                                      color: "#fff",
+                                      fontWeight: 700,
+                                    }}
+                                  />
+                                ) : (
+                                  "-"
+                                )}
+                              </TableCell>
+                              <TableCell align="right">{inText}</TableCell>
+                              <TableCell align="right">{outText}</TableCell>
+                              <TableCell align="right">{fmtNum(net)}</TableCell>
+                            </TableRow>
+                          );
+                        })
+                    )}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+
+              <Divider sx={{ my: 1.5 }} />
+              <Stack direction="row" justifyContent="space-between">
+                <Typography variant="body2" color="text.secondary">
+                  {rows.length.toLocaleString()} items
+                </Typography>
+                <Typography variant="body2" color="text.secondary">
+                  Sum Net: {fmtNum(rows.reduce((s, r) => s + rowAbsNet(r), 0))}{" "}
+                  kg
+                </Typography>
+              </Stack>
+            </Paper>
 
             {/* Toast */}
             <Snackbar
