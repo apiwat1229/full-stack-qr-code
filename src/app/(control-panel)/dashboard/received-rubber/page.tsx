@@ -189,12 +189,14 @@ export default function DashboardSummaryPage() {
     return baseFrom.endOf("month").startOf("day");
   }, []);
 
-  // ✅ เมื่อกลับมาที่ This Day ให้ยึด "วันนี้" เสมอ
+  // กลับมาแท็บ This Day ให้รีเซ็ตเป็นวันนี้อัตโนมัติ
   const onChangeTab = (_: any, v: RangeTab) => {
     setTab(v);
-    const baseForAlign =
-      v === 0 ? todayRef.current : (from ?? todayRef.current);
-    const nf = alignFromForTab(baseForAlign, v);
+    const base =
+      v === 0
+        ? dayjs().startOf("day") // วันปัจจุบัน
+        : (from ?? todayRef.current).startOf("day");
+    const nf = alignFromForTab(base, v);
     setFrom(nf);
     setTo(computeTo(nf, v));
   };
@@ -397,7 +399,9 @@ export default function DashboardSummaryPage() {
         foreColor: "inherit",
         animations: { enabled: true },
       },
-      plotOptions: { bar: { columnWidth: tab === 0 ? "55%" : "45%" } },
+      plotOptions: {
+        bar: { columnWidth: tab === 0 ? "60%" : "55%" },
+      },
       dataLabels: {
         enabled: true,
         enabledOnSeries: [totalLabelSeriesIndex],
@@ -415,14 +419,14 @@ export default function DashboardSummaryPage() {
         labels: { style: { colors: theme.palette.text.secondary } },
       },
       yaxis: {
-        title: { text: "Total Net (kg)" },
+        title: { text: "Total Net ( Kg )" },
         labels: { style: { colors: theme.palette.text.secondary } },
       },
       tooltip: {
         shared: true,
-        intersect: false,
+        intersect: false, // เปิด shared ต้องปิด intersect
         theme: theme.palette.mode,
-        y: { formatter: (v) => (v ? `${v.toLocaleString()} kg` : "0 kg") },
+        y: { formatter: (v) => (v ? `${v.toLocaleString()} Kg.` : "0 Kg.") },
       },
       colors: seriesForChart.slice(0, -1).map((s) => colorForType(s.name)),
       legend: {
@@ -510,7 +514,7 @@ export default function DashboardSummaryPage() {
                   <FormLabel>Search (Code / Supplier / Plate)</FormLabel>
                   <TextField
                     size="small"
-                    placeholder="เช่น 2025082801 / สมหญิง / 1กก-1234"
+                    placeholder="Ex: 2025082801 / 1กก-1234"
                     value={q}
                     onChange={(e) => setQ(e.target.value)}
                     InputProps={{
@@ -523,6 +527,7 @@ export default function DashboardSummaryPage() {
                     sx={{ "& .MuiOutlinedInput-root": { borderRadius: 1 } }}
                   />
                 </FormControl>
+
                 {tab === 0 && (
                   <Stack direction="row" spacing={1.25} alignItems="center">
                     <Typography variant="body2" color="text.secondary">
@@ -558,19 +563,15 @@ export default function DashboardSummaryPage() {
               </Stack>
             </Paper>
 
-            {/* Overview (สั้น) */}
-            <Paper
-              sx={{ p: 2.5, borderRadius: 1, mb: 2 }}
-              variant="outlined"
-              component={motion.div}
-              initial={{ opacity: 0, y: 6 }}
-              animate={{ opacity: 1, y: 0 }}
-            >
-              <Typography className="font-medium" color="text.secondary">
-                Overview • {headerRangeText}
-              </Typography>
-              <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <Box className="rounded-xl border px-1 py-8 flex flex-col items-center justify-center">
+            {/* ====== KPI + Rubber Types (บนแถวเดียวกัน) ====== */}
+            <div className="grid grid-cols-12 gap-3 mb-2">
+              {/* KPI 1 */}
+              <Paper
+                className="col-span-12 sm:col-span-6 lg:col-span-2"
+                variant="outlined"
+                sx={{ p: 2, borderRadius: 1 }}
+              >
+                <Box className="px-1 py-6 flex flex-col items-center justify-center">
                   <Typography
                     className="text-5xl font-semibold"
                     color="secondary"
@@ -584,7 +585,15 @@ export default function DashboardSummaryPage() {
                     Total Bookings
                   </Typography>
                 </Box>
-                <Box className="rounded-xl border px-1 py-8 flex flex-col items-center justify-center">
+              </Paper>
+
+              {/* KPI 2 */}
+              <Paper
+                className="col-span-12 sm:col-span-6 lg:col-span-2"
+                variant="outlined"
+                sx={{ p: 2, borderRadius: 1 }}
+              >
+                <Box className="px-1 py-6 flex flex-col items-center justify-center">
                   <Typography
                     className="text-5xl font-semibold"
                     color="primary"
@@ -598,136 +607,134 @@ export default function DashboardSummaryPage() {
                     In Progress
                   </Typography>
                 </Box>
-              </div>
-            </Paper>
+              </Paper>
 
-            {/* Charts */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-12 items-start">
-              <div>
+              {/* Rubber Types panel (ย้ายขึ้นมาอยู่ขวา กินพื้นที่กว้าง) */}
+              <Paper
+                className="col-span-12 lg:col-span-8"
+                variant="outlined"
+                sx={{ p: 2, borderRadius: 1 }}
+              >
                 <Typography variant="subtitle2" sx={{ mb: 1 }}>
-                  {tab === 0
-                    ? "Total Net by hour (abs(Out − In))"
-                    : tab === 1
-                      ? "Total Net by day (Mon–Sun)"
-                      : "Total Net by day (this month)"}
+                  Rubber Types ( Weight & Share )
                 </Typography>
-                <Paper variant="outlined" sx={{ borderRadius: 1, p: 1 }}>
-                  {loading ? (
-                    <Box sx={{ height: 340 }}>
-                      <FuseLoading />
-                    </Box>
-                  ) : (
-                    <ReactApexChart
-                      options={chartOptions}
-                      series={seriesForChart}
-                      type="bar"
-                      height={340}
-                    />
-                  )}
-                </Paper>
-              </div>
+                <Stack spacing={1.25}>
+                  {(() => {
+                    const byType = new Map<string, number>();
+                    for (const r of rows) {
+                      const name = (r.rubberTypeName || "—").trim();
+                      const w = rowUseWeight(r);
+                      if (w <= 0) continue;
+                      byType.set(name, (byType.get(name) || 0) + w);
+                    }
+                    const list = Array.from(byType.entries())
+                      .map(([name, weight]) => ({ name, weight }))
+                      .sort((a, b) => b.weight - a.weight);
+                    const total = list.reduce((s, x) => s + x.weight, 0);
 
-              {/* Right: Rubber types summary */}
-              <div>
-                <Typography variant="subtitle2" sx={{ mb: 1 }}>
-                  Rubber Types (weight & share)
-                </Typography>
-                <Paper variant="outlined" sx={{ borderRadius: 1, p: 2 }}>
-                  <Stack spacing={1.25}>
-                    {(() => {
-                      const byType = new Map<string, number>();
-                      for (const r of rows) {
-                        const name = (r.rubberTypeName || "—").trim();
-                        const w = rowUseWeight(r);
-                        if (w <= 0) continue;
-                        byType.set(name, (byType.get(name) || 0) + w);
-                      }
-                      const list = Array.from(byType.entries())
-                        .map(([name, weight]) => ({ name, weight }))
-                        .sort((a, b) => b.weight - a.weight);
-                      const total = list.reduce((s, x) => s + x.weight, 0);
-
-                      return (
-                        <>
-                          {list.map((it) => {
-                            const pct = total
-                              ? Math.round((it.weight / total) * 100)
-                              : 0;
-                            const barColor = colorForType(it.name);
-                            return (
-                              <Box key={it.name}>
-                                <Stack
-                                  direction="row"
-                                  alignItems="center"
-                                  spacing={1}
-                                  sx={{ mb: 0.5 }}
+                    return (
+                      <>
+                        {list.map((it) => {
+                          const pct = total
+                            ? Math.round((it.weight / total) * 100)
+                            : 0;
+                          const barColor = colorForType(it.name);
+                          return (
+                            <Box key={it.name}>
+                              <Stack
+                                direction="row"
+                                alignItems="center"
+                                spacing={1}
+                                sx={{ mb: 0.5 }}
+                              >
+                                <Chip
+                                  size="small"
+                                  label={it.name || "—"}
+                                  sx={{
+                                    bgcolor: barColor,
+                                    color: "#fff",
+                                    fontWeight: 700,
+                                  }}
+                                />
+                                <Typography
+                                  variant="body2"
+                                  color="text.secondary"
                                 >
-                                  <Chip
-                                    size="small"
-                                    label={it.name || "—"}
-                                    sx={{
-                                      bgcolor: barColor,
-                                      color: "#fff",
-                                      fontWeight: 700,
-                                    }}
-                                  />
-                                  <Typography
-                                    variant="body2"
-                                    color="text.secondary"
-                                  >
-                                    {fmtNum(it.weight)} kg
-                                  </Typography>
-                                  <Box sx={{ flexGrow: 1 }} />
-                                  <Typography
-                                    variant="body2"
-                                    color="text.secondary"
-                                  >
-                                    {pct}%
-                                  </Typography>
-                                </Stack>
+                                  {fmtNum(it.weight)} Kg.
+                                </Typography>
+                                <Box sx={{ flexGrow: 1 }} />
+                                <Typography
+                                  variant="body2"
+                                  color="text.secondary"
+                                >
+                                  {pct}%
+                                </Typography>
+                              </Stack>
+                              <Box
+                                sx={{
+                                  height: 8,
+                                  borderRadius: 5,
+                                  bgcolor: "divider",
+                                  overflow: "hidden",
+                                }}
+                              >
                                 <Box
                                   sx={{
-                                    height: 8,
-                                    borderRadius: 5,
-                                    bgcolor: "divider",
-                                    overflow: "hidden",
+                                    width: `${pct}%`,
+                                    height: "100%",
+                                    bgcolor: barColor,
                                   }}
-                                >
-                                  <Box
-                                    sx={{
-                                      width: `${pct}%`,
-                                      height: "100%",
-                                      bgcolor: barColor,
-                                    }}
-                                  />
-                                </Box>
+                                />
                               </Box>
-                            );
-                          })}
-                          <Stack
-                            direction="row"
-                            alignItems="center"
-                            justifyContent="space-between"
-                            sx={{ mt: 1 }}
-                          >
-                            <Typography variant="body2" fontWeight={700}>
-                              Total
-                            </Typography>
-                            <Typography variant="body2" fontWeight={700}>
-                              {fmtNum(total)} kg
-                            </Typography>
-                          </Stack>
-                        </>
-                      );
-                    })()}
-                  </Stack>
-                </Paper>
-              </div>
+                            </Box>
+                          );
+                        })}
+                        <Stack
+                          direction="row"
+                          alignItems="center"
+                          justifyContent="space-between"
+                          sx={{ mt: 1 }}
+                        >
+                          <Typography variant="body2" fontWeight={700}>
+                            Total
+                          </Typography>
+                          <Typography variant="body2" fontWeight={700}>
+                            {fmtNum(total)} Kg.
+                          </Typography>
+                        </Stack>
+                      </>
+                    );
+                  })()}
+                </Stack>
+              </Paper>
             </div>
 
-            {/* ===== Table of bookings (ปรับคอลัมน์) ===== */}
+            {/* ===== Bar chart (เต็มความกว้าง) ===== */}
+            <Paper variant="outlined" sx={{ borderRadius: 1, p: 1, mb: 3 }}>
+              <Typography variant="subtitle2" sx={{ mb: 1, px: 1.5, pt: 1 }}>
+                {tab === 0
+                  ? "Total Net Weight by hour"
+                  : tab === 1
+                    ? "Total Net Weight by day (Mon–Sun)"
+                    : "Total Net Weight by day (Current Month)"}
+              </Typography>
+              {loading ? (
+                <Box sx={{ height: 400 }}>
+                  <FuseLoading />
+                </Box>
+              ) : (
+                <ReactApexChart
+                  options={chartOptions}
+                  series={seriesForChart}
+                  type="bar"
+                  height={400} // สูงขึ้น และกว้างเต็มแถว (เพราะอยู่ในแถวเดี่ยว)
+                />
+              )}
+            </Paper>
+
+            {/* ===== ตารางรายละเอียด ===== */}
             <Paper
-              sx={{ mt: 4, p: 2, borderRadius: 1 }}
+              sx={{ p: 2, borderRadius: 1 }}
               variant="outlined"
               component={motion.div}
               initial={{ opacity: 0, y: 6 }}
@@ -750,9 +757,9 @@ export default function DashboardSummaryPage() {
                       <TableCell>License Plate</TableCell>
                       <TableCell>Truck Type</TableCell>
                       <TableCell>Rubber</TableCell>
-                      <TableCell align="right">Weight In (kg)</TableCell>
-                      <TableCell align="right">Weight Out (kg)</TableCell>
-                      <TableCell align="right">Net |Out−In|</TableCell>
+                      <TableCell align="right">Weight In ( Kg. )</TableCell>
+                      <TableCell align="right">Weight Out ( Kg. )</TableCell>
+                      <TableCell align="right">Net Weight ( Kg. )</TableCell>
                     </TableRow>
                   </TableHead>
                   <TableBody>
@@ -775,10 +782,9 @@ export default function DashboardSummaryPage() {
                     ) : (
                       rows
                         .slice()
-                        .sort((a, b) =>
-                          a.date === b.date
-                            ? a.startTime.localeCompare(b.startTime)
-                            : a.date.localeCompare(b.date)
+                        .sort(
+                          (a, b) =>
+                            dayjs(a.date).valueOf() - dayjs(b.date).valueOf()
                         )
                         .map((r) => {
                           const trailer = isTrailer(r.truckType);
@@ -839,7 +845,7 @@ export default function DashboardSummaryPage() {
                 </Typography>
                 <Typography variant="body2" color="text.secondary">
                   Sum Net: {fmtNum(rows.reduce((s, r) => s + rowAbsNet(r), 0))}{" "}
-                  kg
+                  Kg.
                 </Typography>
               </Stack>
             </Paper>
