@@ -55,9 +55,9 @@ const defaultValues: FormType = {
 
 /* 🔧 กำหนดปลายทางตามระบบที่เลือก (แก้ได้ตามใจ) */
 const ROUTE_BY_SYSTEM: Record<FormType["system"], string> = {
-  qr: "/dashboard/qr-code-v1",
-  dla: "/dashboard/dla-v1",
-  pm: "/dashboard/pm-v1",
+  qr: "/dashboard/qr-code/v1",
+  dla: "/dashboard/dla/v1",
+  pm: "/dashboard/pm/v1",
 };
 
 /* ===== Component ===== */

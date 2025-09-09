@@ -23,9 +23,9 @@ type AuthGuardProps = {
 
 // map ระบบ → เส้นทาง
 const ROUTE_BY_SYSTEM: Record<string, string> = {
-  qr: "/dashboard/qr-code-v1",
-  dla: "/dashboard/dla-v1",
-  pm: "/dashboard/pm-v1",
+  qr: "/dashboard/qr-code/v1",
+  dla: "/dashboard/dla/v1",
+  pm: "/dashboard/pm/v1",
 };
 
 function AuthGuardRedirect({
