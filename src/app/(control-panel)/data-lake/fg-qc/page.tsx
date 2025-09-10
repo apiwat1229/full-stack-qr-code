@@ -351,7 +351,7 @@ export default function FGQCPage() {
           <Box className="p-6">
             <Stack direction="row" alignItems="center" spacing={1}>
               <Typography variant="h5" fontWeight={800}>
-                FG / QC • Data Entry
+                Environment / FG Data
               </Typography>
               <Chip size="small" color="primary" label="YTRC Data Lake" />
               <Box sx={{ flexGrow: 1 }} />

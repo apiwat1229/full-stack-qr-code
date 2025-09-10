@@ -176,7 +176,7 @@ export default function MachineEntryPage() {
           <Box className="p-6">
             <Stack direction="row" alignItems="center" spacing={1}>
               <Typography variant="h5" fontWeight={800}>
-                Machine • Data Entry
+                Machine Data
               </Typography>
               <Chip size="small" color="primary" label="YTRC Data Lab" />
               <Box sx={{ flexGrow: 1 }} />
