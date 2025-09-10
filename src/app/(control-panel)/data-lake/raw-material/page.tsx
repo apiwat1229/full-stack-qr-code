@@ -325,7 +325,7 @@ export default function RawMaterialEntryPage() {
           <Box className="p-6">
             <Stack direction="row" alignItems="center" spacing={1}>
               <Typography variant="h5" fontWeight={800}>
-                Raw Material • Data Entry
+                Raw Material
               </Typography>
               <Chip size="small" color="primary" label={headerDate || "—"} />
               <Box sx={{ flexGrow: 1 }} />
