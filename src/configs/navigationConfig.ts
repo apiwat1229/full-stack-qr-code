@@ -21,7 +21,7 @@ const navigationConfig: FuseNavItemType[] = [
 				title: 'Users Management',
 				type: 'item',
 				icon: 'lucide:user-cog',
-				url: '/admin/user-list',   // → http://localhost:4560/admin/user-list
+				url: '/admin/user-list', // → http://localhost:4560/admin/user-list
 				end: true,
 			},
 		],
@@ -106,6 +106,40 @@ const navigationConfig: FuseNavItemType[] = [
 				type: 'item',
 				icon: 'lucide:log-out',
 				url: '/check-out',
+				end: true,
+			},
+		],
+	},
+
+	// 🧪 YTRC Data Lab (เมนูใหม่)
+	{
+		id: 'ytrc-data-lake',
+		title: 'YTRC Data Lake',
+		type: 'group',
+		icon: 'lucide:flask-conical',
+		children: [
+			{
+				id: 'lab-raw-material',
+				title: 'Raw Material',
+				type: 'item',
+				icon: 'lucide:clipboard-pen',
+				url: '/data-lake/raw-material',
+				end: true,
+			},
+			{
+				id: 'lab-machine',
+				title: 'Machine',
+				type: 'item',
+				icon: 'lucide:cog',
+				url: '/data-lake/machine',
+				end: true,
+			},
+			{
+				id: 'lab-fg-qc', // ✅ id ใหม่
+				title: 'Environment / FG', // ✅ ชื่อเมนู
+				type: 'item',
+				icon: 'lucide:clipboard-list', // ✅ icon แนะนำ (เลือกได้จาก lucide)
+				url: '/data-lake/fg-qc', // ✅ path ที่ไปหน้าใหม่
 				end: true,
 			},
 		],
