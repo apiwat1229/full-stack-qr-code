@@ -7,9 +7,10 @@ dayjs.extend(duration);
 
 import FusePageSimple from "@fuse/core/FusePageSimple";
 import DownloadIcon from "@mui/icons-material/Download";
-import EditIcon from "@mui/icons-material/Edit";
+// ⬇️ เปลี่ยนเฉพาะไอคอน
+import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
 import ReplayIcon from "@mui/icons-material/Replay";
-import SaveIcon from "@mui/icons-material/Save";
+import SaveAltIcon from "@mui/icons-material/SaveAlt";
 import SearchIcon from "@mui/icons-material/Search";
 import {
   Alert,
@@ -694,9 +695,9 @@ export default function WeightOutListPage() {
                               {alreadyOut ? (
                                 <Button
                                   size="small"
-                                  variant="outlined" // ✅ outlined = ปุ่มขาว ขอบดำ
+                                  variant="outlined"
                                   color="inherit"
-                                  startIcon={<EditIcon />} // ✅ ใช้ EditIcon
+                                  startIcon={<EditOutlinedIcon />}
                                   onClick={() => openDialog(r)}
                                   sx={{ borderRadius: RADIUS }}
                                 >
@@ -705,9 +706,9 @@ export default function WeightOutListPage() {
                               ) : (
                                 <Button
                                   size="small"
-                                  variant="contained" // ✅ ปุ่มปกติสีน้ำเงิน
+                                  variant="contained"
                                   color="secondary"
-                                  startIcon={<SaveIcon />} // ✅ ใช้ SaveIcon
+                                  startIcon={<SaveAltIcon />}
                                   onClick={() => openDialog(r)}
                                   sx={{ borderRadius: RADIUS }}
                                 >
