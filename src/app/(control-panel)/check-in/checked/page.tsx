@@ -853,7 +853,7 @@ export default function CheckedInSummaryPage() {
             >
               <Box>
                 <Typography variant="h5" fontWeight={800}>
-                  Checked in
+                  Weight in
                 </Typography>
                 <Typography variant="body2" color="text.secondary">
                   {rows.length.toLocaleString()} Items
