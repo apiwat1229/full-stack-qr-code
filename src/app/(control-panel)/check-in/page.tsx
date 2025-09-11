@@ -157,7 +157,6 @@ async function fetchJSON<T>(
     ...init,
     headers,
   });
-
   const txt = await res.text().catch(() => "");
   const ct = res.headers.get("content-type") || "";
 
@@ -172,6 +171,12 @@ async function fetchJSON<T>(
         message = "Unauthorized (no credentials to call backend via proxy)";
       }
     } catch {}
+
+    // ถ้า 401 และไม่มี token => คืน error ที่ caller จะจัดการเอง (ไม่โยน overlay)
+    if (res.status === 401 && !bearer) {
+      return Promise.reject(new Error(message));
+    }
+
     throw new Error(message);
   }
 
@@ -601,7 +606,22 @@ export default function CheckInPage() {
   }, [session, status]);
 
   React.useEffect(() => {
+    // ถ้าไม่ได้ login ให้ใช้ fallback perms แล้วพร้อมใช้งานทันที
+    if (status === "unauthenticated") {
+      setPerms({ read: true }); // อ่านได้อย่างน้อย
+      setPermsReady(true);
+      return;
+    }
+
+    // login แล้วแต่ไม่มี token ก็ไม่ต้องเรียก backend เพื่อลด error overlay
+    if (status === "authenticated" && !authToken) {
+      setPerms(seedPermsFromSession(session));
+      setPermsReady(true);
+      return;
+    }
+
     if (status !== "authenticated") return;
+
     let cancelled = false;
     (async () => {
       try {
@@ -612,13 +632,22 @@ export default function CheckInPage() {
           setPermsReady(true);
         }
       } catch (e) {
-        console.error("Failed to fetch user permissions:", e);
+        // ใช้ warn เพื่อไม่ให้ Next Dev Overlay โผล่
+        console.warn(
+          "Fetch user permissions failed; using session fallback.",
+          e
+        );
+        if (!cancelled) {
+          setPerms(seedPermsFromSession(session));
+          setPermsReady(true);
+        }
       }
     })();
+
     return () => {
       cancelled = true;
     };
-  }, [status, callApi]);
+  }, [status, callApi, authToken, session]);
 
   const resetForm = React.useCallback(() => {
     // ยกเลิกคำขอ fetch ที่ค้างอยู่

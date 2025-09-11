@@ -1,3 +1,4 @@
+// src/app/cuplump-received/page.tsx
 "use client";
 
 import FusePageSimple from "@fuse/core/FusePageSimple";
@@ -97,9 +98,9 @@ function firstDefined<T>(
 }
 
 function asDayjs(v: unknown, fallback?: Dayjs | null) {
-  if (!v) return fallback ?? dayjs();
-  const d = dayjs(v as any);
-  return d.isValid() ? d : (fallback ?? dayjs());
+  const d = v ? dayjs(v as any) : null;
+  if (d && d.isValid()) return d;
+  return fallback ?? dayjs();
 }
 
 /* ========== NORMALIZE EVENT ========== */
@@ -212,12 +213,16 @@ function aggregateRows(items: ReturnType<typeof normalizeEvent>[]): Row[] {
         inTrailer - outTrailer
       ).toLocaleString()}`;
     } else {
-      const inSum = it.inSingle ?? it.inHead ?? 0 + (it.inTrailer ?? 0);
+      const inSum =
+        typeof it.inSingle === "number"
+          ? it.inSingle
+          : (it.inHead ?? 0) + (it.inTrailer ?? 0);
       const outSum =
-        it.outSingle ??
-        (it.outHead != null || it.outTrailer != null
-          ? (it.outHead ?? 0) + (it.outTrailer ?? 0)
-          : null);
+        typeof it.outSingle === "number"
+          ? it.outSingle
+          : it.outHead != null || it.outTrailer != null
+            ? (it.outHead ?? 0) + (it.outTrailer ?? 0)
+            : null;
 
       gross = inSum.toLocaleString();
       net =
@@ -278,18 +283,12 @@ const MOCK_EVENTS: EventRaw[] = [
 export default function CuplumpReceivedPage() {
   const router = useRouter();
 
-  // ⭐️ CHANGED: แก้ไข useState ให้โหลดค่าจาก localStorage เป็นค่าเริ่มต้น
   const [listDate, setListDate] = React.useState<Dayjs | null>(() => {
-    // ฟังก์ชันนี้จะทำงานแค่ครั้งเดียวตอน component โหลด
-    if (typeof window === "undefined") {
-      return dayjs(); // ถ้าเป็นฝั่ง Server ให้ใช้วันปัจจุบัน
-    }
+    if (typeof window === "undefined") return dayjs();
     try {
-      const savedDate = window.localStorage.getItem(LOCAL_STORAGE_DATE_KEY);
-      // ใช้ asDayjs เพื่อแปลงค่าที่โหลดมา ถ้าไม่มีค่าหรือแปลงไม่ได้ ให้ใช้วันปัจจุบัน
-      return savedDate ? asDayjs(savedDate, dayjs()) : dayjs();
+      const saved = window.localStorage.getItem(LOCAL_STORAGE_DATE_KEY);
+      return saved ? asDayjs(saved, dayjs()) : dayjs();
     } catch {
-      // หากเกิดข้อผิดพลาดในการเข้าถึง localStorage
       return dayjs();
     }
   });
@@ -306,21 +305,14 @@ export default function CuplumpReceivedPage() {
     sev: "success" as "success" | "error" | "info",
   });
 
-  // ⭐️ ADDED: ฟังก์ชันสำหรับจัดการการเปลี่ยนแปลงวันที่และบันทึกลง localStorage
-  const handleDateChange = (newDate: Dayjs | null) => {
-    const validDate = asDayjs(newDate, listDate); // ตรวจสอบและแปลงค่าวันที่ให้ถูกต้อง
-    setListDate(validDate);
+  const handleDateChange = (d: Dayjs | null) => {
+    const v = asDayjs(d, listDate);
+    setListDate(v);
     try {
       if (typeof window !== "undefined") {
-        // บันทึกวันที่ในรูปแบบมาตรฐาน ISO string
-        window.localStorage.setItem(
-          LOCAL_STORAGE_DATE_KEY,
-          validDate.toISOString()
-        );
+        window.localStorage.setItem(LOCAL_STORAGE_DATE_KEY, v.toISOString());
       }
-    } catch (e) {
-      console.error("Failed to save date to localStorage:", e);
-    }
+    } catch {}
   };
 
   const loadData = React.useCallback(async () => {
@@ -328,12 +320,10 @@ export default function CuplumpReceivedPage() {
     try {
       const data = await fetchJSON<EventRaw[]>(EVENTS_API(listDateISO));
       const norm = (data || []).map(normalizeEvent);
-      const agg = aggregateRows(norm);
-      setRows(agg);
+      setRows(aggregateRows(norm));
     } catch {
       const norm = MOCK_EVENTS.map(normalizeEvent);
-      const agg = aggregateRows(norm);
-      setRows(agg);
+      setRows(aggregateRows(norm));
       setToast({
         open: true,
         msg: "เรียก API ไม่สำเร็จ — ใช้ข้อมูลจำลองแทน",
@@ -361,7 +351,6 @@ export default function CuplumpReceivedPage() {
               <DatePicker
                 label="Date"
                 value={listDate}
-                // ⭐️ CHANGED: เรียกใช้ handleDateChange เมื่อมีการเลือกวันที่
                 onChange={handleDateChange}
                 format="DD-MMM-YYYY"
               />
@@ -408,7 +397,6 @@ export default function CuplumpReceivedPage() {
                       <TableCell align="right">Net Weight</TableCell>
                     </TableRow>
                   </TableHead>
-
                   <TableBody>
                     {loading ? (
                       <TableRow>
@@ -433,7 +421,6 @@ export default function CuplumpReceivedPage() {
                           hover
                           sx={{ cursor: "pointer" }}
                           onClick={() => {
-                            // ⬇️ เก็บ payload ของแถวที่คลิกไว้ เพื่อให้หน้า Detail หยิบไปใช้ได้
                             const payload = {
                               dateISO: r.dateISO,
                               dateText: r.date,
@@ -441,8 +428,8 @@ export default function CuplumpReceivedPage() {
                               rubberType: r.rubberType,
                               truckRegisters: r.truckRegisters,
                               truckTypes: r.truckTypes,
-                              grossWeight: r.grossWeight, // อาจเป็น "8000/3500" ถ้าเป็นพ่วง
-                              netWeight: r.netWeight, // อาจเป็น "7800/3200" ถ้าเป็นพ่วง
+                              grossWeight: r.grossWeight,
+                              netWeight: r.netWeight,
                             };
                             try {
                               sessionStorage.setItem(
@@ -450,14 +437,8 @@ export default function CuplumpReceivedPage() {
                                 JSON.stringify(payload)
                               );
                             } catch {}
-
-                            // ไปหน้า detail พร้อม query หลักไว้เป็น fallback
                             router.push(
-                              `/cuplump-received/${r.id}?date=${encodeURIComponent(
-                                r.dateISO
-                              )}&supplier=${encodeURIComponent(r.supplierLabel)}&rubberType=${encodeURIComponent(
-                                r.rubberType
-                              )}`
+                              `/cuplump-received/${r.id}?date=${encodeURIComponent(r.dateISO)}&supplier=${encodeURIComponent(r.supplierLabel)}&rubberType=${encodeURIComponent(r.rubberType)}`
                             );
                           }}
                         >

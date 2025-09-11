@@ -9,7 +9,6 @@ import {
   Chip,
   CircularProgress,
   Divider,
-  Grid,
   InputAdornment,
   Paper,
   Stack,
@@ -21,6 +20,9 @@ import {
   TextField,
   Typography,
 } from "@mui/material";
+// Grid v2 (รองรับ prop `size`)
+import Grid from "@mui/material/Grid";
+
 import dayjs from "dayjs";
 import { useRouter, useSearchParams } from "next/navigation";
 import * as React from "react";
@@ -31,7 +33,7 @@ const show = (v: any) =>
 
 const toNum = (v: any): number | null => {
   if (v === null || v === undefined || v === "") return null;
-  const n = Number(v);
+  const n = Number(String(v).replace(/[, ]/g, ""));
   return Number.isFinite(n) ? n : null;
 };
 
@@ -69,6 +71,7 @@ function weightBreakText({
   if (s != null) return s.toLocaleString();
   return "-";
 }
+
 function sumOut({
   head,
   trailer,
@@ -84,6 +87,15 @@ function sumOut({
   if (t != null) return t;
   if (h != null || s != null) return (h ?? 0) + (s ?? 0);
   return null;
+}
+
+/** parse "123" หรือ "8000/3500" → {a: number|null, b: number|null} */
+function parsePair(text?: string): { a: number | null; b: number | null } {
+  const s = (text || "").trim();
+  if (!s) return { a: null, b: null };
+  const parts = s.split("/").map((x) => toNum(x));
+  if (parts.length === 1) return { a: parts[0], b: null };
+  return { a: parts[0], b: parts[1] };
 }
 
 /* Small UI helpers */
@@ -119,18 +131,26 @@ const Section = ({
   </Paper>
 );
 
+/** การ์ดสรุป (รองรับปรับความสูงและโทนสี) */
 const StatCard = ({
   title,
   value,
   hint,
   highlight = false,
+  highlightVariant = "success",
   order,
+  height = 156, // ค่า default เพื่อให้ทั้งสามการ์ดสูงเท่ากัน
+  align = "right",
 }: {
   title: string;
   value: React.ReactNode;
   hint?: React.ReactNode;
   highlight?: boolean;
+  /** success = เขียวอ่อน (เดิม), neutral = เทาอ่อน */
+  highlightVariant?: "success" | "neutral";
   order?: { xs?: number; md?: number };
+  height?: number;
+  align?: "left" | "right";
 }) => (
   <Grid
     size={{ xs: 12, sm: 4, md: 4 }}
@@ -138,17 +158,32 @@ const StatCard = ({
   >
     <Paper
       variant="outlined"
-      sx={{
-        p: 2,
-        height: "100%",
-        borderRadius: 2,
-        borderColor: (t) => (highlight ? "success.main" : t.palette.divider),
-        bgcolor: (t) =>
-          highlight
-            ? t.palette.mode === "dark"
-              ? "success.dark"
-              : "success.light"
+      sx={(t) => {
+        const isNeutral = highlight && highlightVariant === "neutral";
+        const border = isNeutral ? t.palette.divider : t.palette.success.main;
+        const bgNeutral =
+          t.palette.mode === "dark" ? t.palette.grey[800] : t.palette.grey[200];
+        const bgSuccess =
+          t.palette.mode === "dark"
+            ? t.palette.success.dark
+            : t.palette.success.light;
+
+        return {
+          p: 2,
+          minHeight: height,
+          borderRadius: 2,
+          display: "flex",
+          flexDirection: "column",
+          justifyContent: "space-between",
+          alignItems: align === "right" ? "flex-end" : "flex-start",
+          textAlign: align === "right" ? "right" : "left",
+          borderColor: highlight ? border : t.palette.divider,
+          bgcolor: highlight
+            ? isNeutral
+              ? bgNeutral
+              : bgSuccess
             : "transparent",
+        };
       }}
     >
       <Typography
@@ -162,7 +197,13 @@ const StatCard = ({
         {value}
       </Typography>
       {hint ? (
-        <Typography variant="caption" sx={{ opacity: 0.8 }}>
+        <Typography
+          variant="caption"
+          sx={{
+            opacity: 0.8,
+            whiteSpace: "pre-line" /* รองรับ \n ให้ขึ้นบรรทัด */,
+          }}
+        >
           {hint}
         </Typography>
       ) : (
@@ -186,6 +227,35 @@ export default function CuplumpDetailPage() {
       const ss = sessionStorage.getItem("cuplump_selected");
       if (ss) {
         const p = JSON.parse(ss);
+        // gross/net จากหน้า list อาจเป็น "a/b" หรือ "a"
+        const g = parsePair(p.grossWeight);
+        const n = parsePair(p.netWeight);
+
+        let weightIn: number | null = null;
+        let weightInHead: number | null = null;
+        let weightInTrailer: number | null = null;
+        let weightOut: number | null = null;
+        let weightOutHead: number | null = null;
+        let weightOutTrailer: number | null = null;
+
+        if (g.b !== null || n.b !== null) {
+          // พ่วง (หัว/หาง)
+          weightInHead = g.a ?? 0;
+          weightInTrailer = g.b ?? 0;
+          const netHead = n.a ?? 0;
+          const netTrailer = n.b ?? 0;
+          weightOutHead = (weightInHead ?? 0) - netHead;
+          weightOutTrailer = (weightInTrailer ?? 0) - netTrailer;
+          weightIn = (weightInHead ?? 0) + (weightInTrailer ?? 0);
+          weightOut = (weightOutHead ?? 0) + (weightOutTrailer ?? 0);
+        } else {
+          // คันเดี่ยว
+          const inSingle = g.a ?? 0;
+          const netSingle = n.a ?? 0;
+          weightIn = inSingle;
+          weightOut = inSingle - netSingle;
+        }
+
         fromSS = {
           dateISO: p.dateISO,
           dateText: p.dateText,
@@ -193,30 +263,22 @@ export default function CuplumpDetailPage() {
           rubberType: p.rubberType,
           truckRegister: p.truckRegisters?.[0] || "",
           truckType: p.truckTypes?.[0] || "",
-          bookingCode: p.bookingCode,
-          sequence: p.sequence,
-          userName: p.userName,
-          startTime: p.startTime,
-          endTime: p.endTime,
-          checkInTime:
-            typeof p.checkInTime === "string"
-              ? { $date: p.checkInTime }
-              : p.checkInTime,
-          drainStartTime: p.drainStartTime,
-          drainStopTime: p.drainStopTime,
-          lotNumber: p.lotNumber,
-          source: p.source,
+          lotNumber: p.lotNumber ?? "-",
+          source: p.source ?? "-",
+
+          weightIn,
+          weightInHead,
+          weightInTrailer,
+          weightOut,
+          weightOutHead,
+          weightOutTrailer,
+
+          // ค่าคุณภาพ (ถ้ามี)
           moisture: toNum(p.moisture),
           cpPercent: toNum(p.cpPercent),
           drcEstimate: toNum(p.drcEstimate),
           drcRequested: toNum(p.drcRequested),
           drcActual: toNum(p.drcActual),
-          weightIn: toNum(p.weightIn),
-          weightInHead: toNum(p.weightInHead),
-          weightInTrailer: toNum(p.weightInTrailer),
-          weightOut: toNum(p.weightOut),
-          weightOutHead: toNum(p.weightOutHead),
-          weightOutTrailer: toNum(p.weightOutTrailer),
         };
       }
     } catch {}
@@ -234,32 +296,6 @@ export default function CuplumpDetailPage() {
       rubberType: q("rubberType")
         ? decodeURIComponent(q("rubberType") as string)
         : undefined,
-
-      bookingCode: q("bookingCode") || undefined,
-      sequence: toNum(q("sequence")),
-      userName: q("userName") || undefined,
-      startTime: q("startTime") || undefined,
-      endTime: q("endTime") || undefined,
-      checkInTime: q("checkInTime")
-        ? { $date: q("checkInTime") as string }
-        : undefined,
-      drainStartTime: q("drainStartTime") || undefined,
-      drainStopTime: q("drainStopTime") || undefined,
-
-      lotNumber: q("lotNumber") || undefined,
-      source: q("source") || undefined,
-      moisture: toNum(q("moisture")),
-      cpPercent: toNum(q("cp") || q("cpPercent")),
-      drcEstimate: toNum(q("drcEstimate")),
-      drcRequested: toNum(q("drcRequested")),
-      drcActual: toNum(q("drcActual")),
-
-      weightIn: toNum(q("weightIn")),
-      weightInHead: toNum(q("weightInHead")),
-      weightInTrailer: toNum(q("weightInTrailer")),
-      weightOut: toNum(q("weightOut")),
-      weightOutHead: toNum(q("weightOutHead")),
-      weightOutTrailer: toNum(q("weightOutTrailer")),
       truckRegister: q("truckRegister") || undefined,
       truckType: q("truckType") || undefined,
     };
@@ -301,6 +337,13 @@ export default function CuplumpDetailPage() {
 
   const trailer = React.useMemo(() => isTrailer(data?.truckType), [data]);
 
+  // สร้าง hint หลายบรรทัด (ถ้าเป็นพ่วง)
+  const headTrailerHint = React.useCallback((pair: string) => {
+    if (!pair.includes("/")) return undefined;
+    const [head, trailer] = pair.split("/").map((s) => s.trim());
+    return `Head = ${head}\nTrailer = ${trailer}`;
+  }, []);
+
   const kgs = React.useMemo(() => {
     if (!data) return null;
     const inPair = weightBreakText({
@@ -322,8 +365,15 @@ export default function CuplumpDetailPage() {
       data.weightIn != null && outSum != null
         ? Math.max(0, data.weightIn - outSum)
         : null;
-    return { inPair, outPair, outSum, net };
-  }, [data]);
+    return {
+      inPair,
+      outPair,
+      outSum,
+      net,
+      inHint: trailer ? headTrailerHint(inPair) : undefined,
+      outHint: trailer ? headTrailerHint(outPair) : undefined,
+    };
+  }, [data, trailer, headTrailerHint]);
 
   if (!data || !kgs) {
     return (
@@ -358,7 +408,7 @@ export default function CuplumpDetailPage() {
         </Typography>
       </Stack>
 
-      {/* ===== Overview: ซ้ายเป็นวันที่แบบ Chip, ขวาเป็น Lot Number ===== */}
+      {/* ===== Overview: ซ้าย = วันที่แบบ Chip, ขวา = Lot Number ===== */}
       <Section
         title={
           <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
@@ -377,7 +427,7 @@ export default function CuplumpDetailPage() {
         }
       >
         <Grid container spacing={1}>
-          {/* Supplier & Truck */}
+          {/* ผู้ขาย & รถ */}
           <Grid size={{ xs: 12, md: 4 }}>
             <Paper
               variant="outlined"
@@ -396,7 +446,7 @@ export default function CuplumpDetailPage() {
             </Paper>
           </Grid>
 
-          {/* Rubber */}
+          {/* ประเภทยาง */}
           <Grid size={{ xs: 12, md: 3 }}>
             <Paper
               variant="outlined"
@@ -414,32 +464,36 @@ export default function CuplumpDetailPage() {
             </Paper>
           </Grid>
 
-          {/* Weights */}
-          <Grid size={{ xs: 12, md: 4 }}>
+          {/* น้ำหนัก — ให้สูงเท่ากัน + NET เป็นเทาอ่อน */}
+          <Grid size={{ xs: 12, md: 5 }}>
             <Grid container spacing={1}>
               <StatCard
                 title="WEIGHT IN (KG.)"
                 value={fmtKg(data.weightIn)}
-                hint={trailer ? `Head / Trailer = ${kgs.inPair}` : undefined}
-                order={{ xs: 2, md: 2 }}
+                hint={kgs.inHint}
+                height={156}
+                align="right"
               />
               <StatCard
                 title="WEIGHT OUT (KG.)"
                 value={fmtKg(kgs.outSum)}
-                hint={trailer ? `Head / Trailer = ${kgs.outPair}` : undefined}
-                order={{ xs: 2, md: 2 }}
+                hint={kgs.outHint}
+                height={156}
+                align="right"
               />
               <StatCard
-                title="NET (KG.)"
+                title="NET WEIGHT (KG.)"
                 value={fmtKg(kgs.net)}
-                hint="= Total In - Total Out"
+                hint="Total In - Total Out"
                 highlight
-                order={{ xs: 3, md: 3 }}
+                highlightVariant="neutral" // 👈 ใช้เทาอ่อนแทนเขียว
+                height={156}
+                align="right"
               />
             </Grid>
           </Grid>
 
-          {/* Quality Input (มาตรฐานฟอร์ม) */}
+          {/* Quality Input */}
           <Grid size={{ xs: 12 }}>
             <Paper variant="outlined" sx={{ p: 2, borderRadius: 2 }}>
               <Typography
@@ -449,7 +503,8 @@ export default function CuplumpDetailPage() {
               >
                 Quality Input
               </Typography>
-              <Grid container spacing={2}>
+
+              <Grid container spacing={2} alignItems="center">
                 <Grid size={{ xs: 12, sm: 6, md: 2 }}>
                   <TextField
                     label="Moisture"
@@ -460,10 +515,7 @@ export default function CuplumpDetailPage() {
                     inputProps={{ step: "0.01" }}
                     value={data.moisture ?? ""}
                     onChange={(e) =>
-                      setData((prev: any) => ({
-                        ...prev,
-                        moisture: e.target.value,
-                      }))
+                      setData((p: any) => ({ ...p, moisture: e.target.value }))
                     }
                     InputProps={{
                       endAdornment: (
@@ -472,6 +524,7 @@ export default function CuplumpDetailPage() {
                     }}
                   />
                 </Grid>
+
                 <Grid size={{ xs: 12, sm: 6, md: 2 }}>
                   <TextField
                     label="%CP"
@@ -482,10 +535,7 @@ export default function CuplumpDetailPage() {
                     inputProps={{ step: "0.01" }}
                     value={data.cpPercent ?? ""}
                     onChange={(e) =>
-                      setData((prev: any) => ({
-                        ...prev,
-                        cpPercent: e.target.value,
-                      }))
+                      setData((p: any) => ({ ...p, cpPercent: e.target.value }))
                     }
                     InputProps={{
                       endAdornment: (
@@ -494,6 +544,7 @@ export default function CuplumpDetailPage() {
                     }}
                   />
                 </Grid>
+
                 <Grid size={{ xs: 12, sm: 6, md: 2 }}>
                   <TextField
                     label="DRC Estimate"
@@ -504,8 +555,8 @@ export default function CuplumpDetailPage() {
                     inputProps={{ step: "0.01" }}
                     value={data.drcEstimate ?? ""}
                     onChange={(e) =>
-                      setData((prev: any) => ({
-                        ...prev,
+                      setData((p: any) => ({
+                        ...p,
                         drcEstimate: e.target.value,
                       }))
                     }
@@ -516,6 +567,7 @@ export default function CuplumpDetailPage() {
                     }}
                   />
                 </Grid>
+
                 <Grid size={{ xs: 12, sm: 6, md: 2 }}>
                   <TextField
                     label="DRC Requested"
@@ -526,8 +578,8 @@ export default function CuplumpDetailPage() {
                     inputProps={{ step: "0.01" }}
                     value={data.drcRequested ?? ""}
                     onChange={(e) =>
-                      setData((prev: any) => ({
-                        ...prev,
+                      setData((p: any) => ({
+                        ...p,
                         drcRequested: e.target.value,
                       }))
                     }
@@ -538,6 +590,7 @@ export default function CuplumpDetailPage() {
                     }}
                   />
                 </Grid>
+
                 <Grid size={{ xs: 12, sm: 6, md: 2 }}>
                   <TextField
                     label="DRC Actual"
@@ -548,10 +601,7 @@ export default function CuplumpDetailPage() {
                     inputProps={{ step: "0.01" }}
                     value={data.drcActual ?? ""}
                     onChange={(e) =>
-                      setData((prev: any) => ({
-                        ...prev,
-                        drcActual: e.target.value,
-                      }))
+                      setData((p: any) => ({ ...p, drcActual: e.target.value }))
                     }
                     InputProps={{
                       endAdornment: (
@@ -560,13 +610,36 @@ export default function CuplumpDetailPage() {
                     }}
                   />
                 </Grid>
+
+                {/* ปุ่มบันทึกในบรรทัดเดียวกัน */}
+                <Grid
+                  size={{ xs: 12, sm: 6, md: 2 }}
+                  display="flex"
+                  justifyContent="flex-end"
+                >
+                  <Button
+                    variant="contained"
+                    startIcon={<SaveIcon />}
+                    onClick={() => {
+                      console.log("Saving Quality Input", {
+                        moisture: data.moisture,
+                        cpPercent: data.cpPercent,
+                        drcEstimate: data.drcEstimate,
+                        drcRequested: data.drcRequested,
+                        drcActual: data.drcActual,
+                      });
+                    }}
+                  >
+                    Save
+                  </Button>
+                </Grid>
               </Grid>
             </Paper>
           </Grid>
         </Grid>
       </Section>
 
-      {/* ===== Saved list ===== */}
+      {/* ===== Saved list (ตัวอย่างข้อมูล mock) ===== */}
       <Section
         title={
           <Typography variant="subtitle1" fontWeight={700}>
@@ -628,75 +701,35 @@ export default function CuplumpDetailPage() {
         dense
       >
         <Grid container spacing={2}>
-          <Grid size={{ xs: 12, sm: 6, md: 2 as any }}>
-            <TextField
-              label="Before Press"
-              variant="outlined"
-              size="small"
-              fullWidth
-            />
-          </Grid>
-          <Grid size={{ xs: 12, sm: 6, md: 2 as any }}>
-            <TextField
-              label="Basket"
-              variant="outlined"
-              size="small"
-              fullWidth
-            />
-          </Grid>
-          <Grid size={{ xs: 12, sm: 6, md: 2 as any }}>
-            <TextField
-              label="Cuplump"
-              variant="outlined"
-              size="small"
-              fullWidth
-            />
-          </Grid>
-          <Grid size={{ xs: 12, sm: 6, md: 2 as any }}>
-            <TextField
-              label="After Press"
-              variant="outlined"
-              size="small"
-              fullWidth
-            />
-          </Grid>
-          <Grid size={{ xs: 12, sm: 6, md: 2 as any }}>
-            <TextField
-              label="%CP"
-              variant="outlined"
-              size="small"
-              fullWidth
-              type="number"
-              inputProps={{ step: "0.01" }}
-              InputProps={{
-                endAdornment: <InputAdornment position="end">%</InputAdornment>,
-              }}
-            />
-          </Grid>
-          <Grid size={{ xs: 12, sm: 6, md: 2 as any }}>
-            <TextField
-              label="Before Baking 1"
-              variant="outlined"
-              size="small"
-              fullWidth
-            />
-          </Grid>
-          <Grid size={{ xs: 12, sm: 6, md: 2 as any }}>
-            <TextField
-              label="Before Baking 2"
-              variant="outlined"
-              size="small"
-              fullWidth
-            />
-          </Grid>
-          <Grid size={{ xs: 12, sm: 6, md: 2 as any }}>
-            <TextField
-              label="Before Baking 3"
-              variant="outlined"
-              size="small"
-              fullWidth
-            />
-          </Grid>
+          {[
+            "Before Press",
+            "Basket",
+            "Cuplump",
+            "After Press",
+            "%CP",
+            "Before Baking 1",
+            "Before Baking 2",
+            "Before Baking 3",
+          ].map((label, idx) => (
+            <Grid key={label} size={{ xs: 12, sm: 6, md: 2 }}>
+              <TextField
+                label={label}
+                variant="outlined"
+                size="small"
+                fullWidth
+                type={label.includes("%") ? "number" : "text"}
+                InputProps={
+                  label.includes("%")
+                    ? {
+                        endAdornment: (
+                          <InputAdornment position="end">%</InputAdornment>
+                        ),
+                      }
+                    : undefined
+                }
+              />
+            </Grid>
+          ))}
         </Grid>
 
         <Button variant="contained" startIcon={<SaveIcon />} sx={{ mt: 2 }}>
