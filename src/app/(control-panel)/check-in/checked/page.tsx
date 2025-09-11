@@ -6,7 +6,9 @@ import duration from "dayjs/plugin/duration";
 import * as React from "react";
 dayjs.extend(duration);
 
+import FusePageSimple from "@fuse/core/FusePageSimple";
 import DownloadIcon from "@mui/icons-material/Download";
+import EditIcon from "@mui/icons-material/Edit";
 import PlayArrowIcon from "@mui/icons-material/PlayArrow";
 import ReplayIcon from "@mui/icons-material/Replay";
 import SaveIcon from "@mui/icons-material/Save";
@@ -14,7 +16,7 @@ import SearchIcon from "@mui/icons-material/Search";
 import StopIcon from "@mui/icons-material/Stop";
 import {
   Alert,
-  Box, // ⬅️ เพิ่ม Box เพื่อใช้กับ FusePageSimple
+  Box,
   Button,
   Chip,
   Divider,
@@ -42,11 +44,11 @@ import { LocalizationProvider } from "@mui/x-date-pickers/LocalizationProvider";
 import { motion } from "framer-motion";
 import { useSession } from "next-auth/react";
 
-// ⬅️ ใช้โครงหน้าแบบ Fuse
-import FusePageSimple from "@fuse/core/FusePageSimple";
-
 import TimeConfirmDialog from "./components/TimeConfirmDialog";
-import WeightDialog, { RubberTypeOpt } from "./components/WeightDialog";
+import WeightDialog, {
+  ProvinceOpt,
+  RubberTypeOpt,
+} from "./components/WeightDialog";
 
 /* ================= CONFIG ================= */
 const API_BASE =
@@ -58,6 +60,7 @@ const EVENTS_API = (dateISO: string) =>
   api(`/bookings/events?date=${encodeURIComponent(dateISO)}`);
 const UPDATE_BOOKING_API = api(`/bookings`);
 const RUBBER_TYPES_API = api(`/bookings/rubber-types`);
+const PROVINCES_API = api(`/locations/provinces`);
 const ME_API = api(`/admin/users/me`);
 const UPDATE_DRAIN_API = (id: string) => api(`/bookings/${id}/drain`);
 const UPDATE_WEIGHTS_API = (id: string) => api(`/bookings/${id}/weights`);
@@ -97,6 +100,11 @@ type BookingView = {
   weightInTrailer?: number | null;
   rubberTypeHeadId?: string | null;
   rubberTypeTrailerId?: string | null;
+
+  // ⭐️ แหล่งยาง (จังหวัด)
+  rubberSourceProvince?: number | null;
+  rubberSourceHeadProvince?: number | null;
+  rubberSourceTrailerProvince?: number | null;
 
   drainStartTime?: string | null; // HH:mm หรือ ISO
   drainStopTime?: string | null; // HH:mm หรือ ISO
@@ -255,7 +263,6 @@ function normalizeFromEvent(raw: any): BookingView {
       xp?.rubber_type_name,
       raw?.rubberTypeName,
       raw?.rubber_type_name,
-      // บางระบบส่งชื่อไว้ใน xp.rubber_type
       typeof xp?.rubber_type === "string" ? xp?.rubber_type : undefined
     ) || "";
 
@@ -264,7 +271,6 @@ function normalizeFromEvent(raw: any): BookingView {
       xp?.rubber_type_id,
       raw?.rubberTypeId,
       raw?.rubber_type_id,
-      // บางระบบส่ง id ไว้ใน xp.rubber_type
       typeof xp?.rubber_type === "string" ? xp?.rubber_type : undefined
     ) ?? null;
 
@@ -308,9 +314,7 @@ function normalizeFromEvent(raw: any): BookingView {
         raw?.truck_type
       ) || "",
     rubberTypeName,
-    // ⬇️ ใช้ถ้าคุณมีฟิลด์นี้ใน BookingView (แนะนำให้มี)
     rubberTypeId,
-
     recorder,
     checkInTime:
       firstDefined(xp?.check_in_time, raw?.checkInTime, raw?.check_in_time) ??
@@ -318,7 +322,6 @@ function normalizeFromEvent(raw: any): BookingView {
 
     weightIn:
       firstDefined(xp?.weight_in, raw?.weightIn, raw?.weight_in) ?? null,
-    // ✅ แก้พิมพ์ผิด (เดิม raw?.WeightInHead)
     weightInHead: firstDefined(xp?.weight_in_head, raw?.weightInHead) ?? null,
     weightInTrailer:
       firstDefined(xp?.weight_in_trailer, raw?.weightInTrailer) ?? null,
@@ -326,6 +329,23 @@ function normalizeFromEvent(raw: any): BookingView {
       firstDefined(xp?.rubber_type_head, raw?.rubberTypeHeadId) ?? null,
     rubberTypeTrailerId:
       firstDefined(xp?.rubber_type_trailer, raw?.rubberTypeTrailerId) ?? null,
+
+    // ⭐️ province (ถ้า BE ส่งมาใน extendedProps จะถูกอ่านตรงนี้)
+    rubberSourceProvince:
+      firstDefined(
+        xp?.rubber_source_province,
+        (raw as any)?.rubberSourceProvince
+      ) ?? null,
+    rubberSourceHeadProvince:
+      firstDefined(
+        xp?.rubber_source_head_province,
+        (raw as any)?.rubberSourceHeadProvince
+      ) ?? null,
+    rubberSourceTrailerProvince:
+      firstDefined(
+        xp?.rubber_source_trailer_province,
+        (raw as any)?.rubberSourceTrailerProvince
+      ) ?? null,
 
     drainStartTime:
       firstDefined(
@@ -411,11 +431,9 @@ function formatDrainCell(v?: string | null) {
   const d = dayjs(v);
   return d.isValid() ? d.format("HH:mm:ss") : String(v);
 }
-
-/** ===== แสดงผล HH:mm สำหรับช่อง Start/Stop ===== */
 function formatDrainCellHHmm(v?: string | null) {
   if (!v) return "";
-  if (isHHmm(v)) return v; // case ที่ BE ส่งมาเป็น "08:15"
+  if (isHHmm(v)) return v;
   const d = dayjs(v);
   return d.isValid() ? d.format("HH:mm") : String(v);
 }
@@ -428,7 +446,7 @@ function LiveTimer({ startISO }: { startISO: string }) {
     return () => clearInterval(t);
   }, []);
   const s = dayjs(startISO);
-  const diff = Math.max(0, Math.floor((now - s.valueOf()) / 1000)); // seconds
+  const diff = Math.max(0, Math.floor((now - s.valueOf()) / 1000));
   const dur = dayjs.duration(diff, "seconds");
   const mm = String(Math.floor(dur.asMinutes())).padStart(2, "0");
   const ss = String(dur.seconds()).padStart(2, "0");
@@ -494,14 +512,13 @@ export default function CheckedInSummaryPage() {
 
   const [rows, setRows] = React.useState<BookingView[]>([]);
   const [rubberTypes, setRubberTypes] = React.useState<RubberTypeOpt[]>([]);
+  const [provinces, setProvinces] = React.useState<ProvinceOpt[]>([]);
   const [loading, setLoading] = React.useState(false);
   const [toast, setToast] = React.useState<{
     open: boolean;
     msg: string;
     sev: "success" | "error" | "info";
   }>({ open: false, msg: "", sev: "success" });
-
-  // ==== Drain log state ====
 
   const listDateISO = React.useMemo(
     () => (listDate?.isValid() ? listDate : dayjs()).format("YYYY-MM-DD"),
@@ -516,6 +533,16 @@ export default function CheckedInSummaryPage() {
           (rts || []).map((r: any) => ({
             id: String(r._id ?? r.id),
             name: r.name,
+          }))
+        );
+      } catch {}
+      try {
+        const pvs = await callApi<any[]>(PROVINCES_API);
+        setProvinces(
+          (pvs || []).map((p) => ({
+            code: Number(p._id ?? p.code ?? p.provinceCode ?? p.id),
+            nameTh: p.nameTh ?? p.nameTH ?? p.name_th ?? p.name ?? "",
+            nameEn: p.nameEn ?? p.nameEN ?? p.name_en ?? "",
           }))
         );
       } catch {}
@@ -608,7 +635,6 @@ export default function CheckedInSummaryPage() {
     return `${mm}:${ss}`;
   };
   function latestOpenStartISO(r: BookingView): string | undefined {
-    // ถ้าเริ่มแล้วและยังไม่หยุด ให้ใช้เวลาจาก drainStartTime
     if (r.drainStartTime && !r.drainStopTime) {
       const base = r.date || dayjs().format("YYYY-MM-DD");
       return isHHmm(r.drainStartTime)
@@ -630,6 +656,9 @@ export default function CheckedInSummaryPage() {
       "rubber_type",
       "rubber_type_head",
       "rubber_type_trailer",
+      "rubber_source_province",
+      "rubber_source_head_province",
+      "rubber_source_trailer_province",
     ].some((k) => Object.prototype.hasOwnProperty.call(body, k));
 
     const isOnlyCheckIn =
@@ -685,17 +714,13 @@ export default function CheckedInSummaryPage() {
   const handleTimeConfirm = async (hhmm: string) => {
     if (!timeDlgRow) return;
     const id = timeDlgRow.id;
-    const field = timeDlgField;
-
-    const base = timeDlgRow.date || dayjs().format("YYYY-MM-DD");
-    const iso = `${base}T${hhmm}:00`;
 
     setRows((prev) =>
       prev.map((x) =>
         x.id === id
           ? {
               ...x,
-              [field === "drain_start_time"
+              [timeDlgField === "drain_start_time"
                 ? "drainStartTime"
                 : "drainStopTime"]: hhmm,
             }
@@ -704,11 +729,11 @@ export default function CheckedInSummaryPage() {
     );
 
     try {
-      await updateRow(id, { [field]: hhmm });
+      await updateRow(id, { [timeDlgField]: hhmm });
       setToast({
         open: true,
         msg:
-          field === "drain_start_time"
+          timeDlgField === "drain_start_time"
             ? "ตั้งเวลา Start Drain แล้ว"
             : "ตั้งเวลา Stop Drain แล้ว",
         sev: "success",
@@ -740,10 +765,14 @@ export default function CheckedInSummaryPage() {
     rubber_type?: string | null;
     rubber_type_head?: string | null;
     rubber_type_trailer?: string | null;
+    rubber_source_province?: number | null;
+    rubber_source_head_province?: number | null;
+    rubber_source_trailer_province?: number | null;
   }) => {
     if (!weightDlgRow) return;
     const id = weightDlgRow.id;
 
+    // ⭐️ Optimistic update ใส่ province ลง state ให้เห็นทันที
     setRows((prev) =>
       prev.map((x) =>
         x.id === id
@@ -757,6 +786,18 @@ export default function CheckedInSummaryPage() {
                 payload.rubber_type_head ?? x.rubberTypeHeadId ?? null,
               rubberTypeTrailerId:
                 payload.rubber_type_trailer ?? x.rubberTypeTrailerId ?? null,
+              rubberSourceProvince:
+                payload.rubber_source_province ??
+                x.rubberSourceProvince ??
+                null,
+              rubberSourceHeadProvince:
+                payload.rubber_source_head_province ??
+                x.rubberSourceHeadProvince ??
+                null,
+              rubberSourceTrailerProvince:
+                payload.rubber_source_trailer_province ??
+                x.rubberSourceTrailerProvince ??
+                null,
             }
           : x
       )
@@ -839,7 +880,6 @@ export default function CheckedInSummaryPage() {
     URL.revokeObjectURL(url);
   };
 
-  // =============== เปลี่ยนโครงหน้าเป็น FusePageSimple ===============
   return (
     <LocalizationProvider dateAdapter={AdapterDayjs}>
       <FusePageSimple
@@ -1027,7 +1067,7 @@ export default function CheckedInSummaryPage() {
                       <TableCell align="center" width={80}>
                         Total Drain
                       </TableCell>
-                      <TableCell align="right" width={160}>
+                      <TableCell align="right" width={170}>
                         Weight In (kg)
                       </TableCell>
                     </TableRow>
@@ -1057,6 +1097,17 @@ export default function CheckedInSummaryPage() {
                       rows.map((r) => {
                         const trailer = isTrailer(r.truckType);
                         const openStartISO = latestOpenStartISO(r);
+
+                        const hasWeights = trailer
+                          ? r.weightInHead != null || r.weightInTrailer != null
+                          : r.weightIn != null;
+
+                        const hasRubberSource =
+                          r.rubberSourceProvince != null ||
+                          r.rubberSourceHeadProvince != null ||
+                          r.rubberSourceTrailerProvince != null;
+
+                        const showEdit = hasWeights || hasRubberSource;
 
                         return (
                           <TableRow key={r.id || r.bookingCode} hover>
@@ -1177,12 +1228,20 @@ export default function CheckedInSummaryPage() {
                                 </Typography>
                                 <IconButton
                                   size="small"
-                                  color="primary"
+                                  color={showEdit ? "inherit" : "primary"}
                                   onClick={() => openWeightDialog(r)}
-                                  title="บันทึก Weight In"
+                                  title={
+                                    showEdit
+                                      ? "แก้ไข Weight/แหล่งยาง"
+                                      : "บันทึก Weight/แหล่งยาง"
+                                  }
                                   disabled={!permsReady || !perms.update}
                                 >
-                                  <SaveIcon fontSize="small" />
+                                  {showEdit ? (
+                                    <EditIcon fontSize="small" />
+                                  ) : (
+                                    <SaveIcon fontSize="small" />
+                                  )}
                                 </IconButton>
                               </Stack>
                             </TableCell>
@@ -1216,10 +1275,9 @@ export default function CheckedInSummaryPage() {
               onSave={handleWeightSave}
               trailer={isTrailer(weightDlgRow?.truckType)}
               rubberTypes={rubberTypes}
+              provinces={provinces}
               initial={{
-                // น้ำหนักรวมใช้ได้ทั้งสองกรณี (รถพ่วง BE อาจไม่ใช้ค่านี้)
                 weight_in: weightDlgRow?.weightIn ?? null,
-                // ถ้าเป็นรถพ่วง ใส่เฉพาะคีย์ของพ่วง
                 ...(isTrailer(weightDlgRow?.truckType)
                   ? {
                       weight_in_head: weightDlgRow?.weightInHead ?? null,
@@ -1227,14 +1285,18 @@ export default function CheckedInSummaryPage() {
                       rubber_type_head: weightDlgRow?.rubberTypeHeadId || "",
                       rubber_type_trailer:
                         weightDlgRow?.rubberTypeTrailerId || "",
+                      rubber_source_head_province:
+                        weightDlgRow?.rubberSourceHeadProvince ?? null,
+                      rubber_source_trailer_province:
+                        weightDlgRow?.rubberSourceTrailerProvince ?? null,
                     }
                   : {
-                      // รถเดี่ยว ใช้ rubber_type เดียว
-                      // พยายามดึงจาก rubberTypeId (ถ้ามี) รองลงมาจาก rubberTypeHeadId (บาง BE reuse field เดียวกัน)
                       rubber_type:
                         (weightDlgRow?.rubberTypeId as string | undefined) ??
                         weightDlgRow?.rubberTypeHeadId ??
                         "",
+                      rubber_source_province:
+                        weightDlgRow?.rubberSourceProvince ?? null,
                     }),
               }}
             />

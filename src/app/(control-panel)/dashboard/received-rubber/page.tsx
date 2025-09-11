@@ -84,6 +84,105 @@ const colorForType = (name: string) => {
   return VIBRANT_PALETTE[h % VIBRANT_PALETTE.length];
 };
 
+/* ===== Provinces & helpers (สำหรับ Rubber Source) ===== */
+const TH_PROVINCES: Record<number, string> = {
+  10: "กรุงเทพมหานคร",
+  11: "สมุทรปราการ",
+  12: "นนทบุรี",
+  13: "ปทุมธานี",
+  14: "พระนครศรีอยุธยา",
+  15: "อ่างทอง",
+  16: "ลพบุรี",
+  17: "สิงห์บุรี",
+  18: "ชัยนาท",
+  19: "สระบุรี",
+  20: "ชลบุรี",
+  21: "ระยอง",
+  22: "จันทบุรี",
+  23: "ตราด",
+  24: "ฉะเชิงเทรา",
+  25: "ปราจีนบุรี",
+  26: "นครนายก",
+  27: "สระแก้ว",
+  30: "นครราชสีมา",
+  31: "บุรีรัมย์",
+  32: "สุรินทร์",
+  33: "ศรีสะเกษ",
+  34: "อุบลราชธานี",
+  35: "ยโสธร",
+  36: "ชัยภูมิ",
+  37: "อำนาจเจริญ",
+  38: "บึงกาฬ",
+  39: "นครพนม",
+  40: "ขอนแก่น",
+  41: "อุดรธานี",
+  42: "เลย",
+  43: "หนองคาย",
+  44: "มหาสารคาม",
+  45: "ร้อยเอ็ด",
+  46: "กาฬสินธุ์",
+  47: "สกลนคร",
+  49: "มุกดาหาร",
+  50: "เชียงใหม่",
+  51: "ลำพูน",
+  52: "ลำปาง",
+  53: "อุตรดิตถ์",
+  54: "แพร่",
+  55: "น่าน",
+  56: "พะเยา",
+  57: "เชียงราย",
+  58: "แม่ฮ่องสอน",
+  60: "นครสวรรค์",
+  61: "อุทัยธานี",
+  62: "กำแพงเพชร",
+  63: "ตาก",
+  64: "สุโขทัย",
+  65: "พิษณุโลก",
+  66: "พิจิตร",
+  67: "เพชรบูรณ์",
+  70: "ราชบุรี",
+  71: "กาญจนบุรี",
+  72: "สุพรรณบุรี",
+  73: "นครปฐม",
+  74: "สมุทรสาคร",
+  75: "สมุทรสงคราม",
+  76: "เพชรบุรี",
+  77: "ประจวบคีรีขันธ์",
+  80: "นครศรีธรรมราช",
+  81: "กระบี่",
+  82: "พังงา",
+  83: "ภูเก็ต",
+  84: "สุราษฎร์ธานี",
+  85: "ระนอง",
+  86: "ชุมพร",
+  90: "สงขลา",
+  91: "สตูล",
+  92: "ตรัง",
+  93: "พัทลุง",
+  94: "ปัตตานี",
+  95: "ยะลา",
+  96: "นราธิวาส",
+};
+const provinceName = (code?: number | null) =>
+  code == null ? undefined : TH_PROVINCES[code] || `จังหวัดรหัส ${code}`;
+/** ดึงรหัสจังหวัดจากค่ารูปแบบต่าง ๆ */
+function pickProvinceCode(anyVal: any): number | null {
+  if (anyVal == null || anyVal === "") return null;
+  if (typeof anyVal === "number" && Number.isFinite(anyVal)) return anyVal;
+  if (typeof anyVal === "string" && /^\d+$/.test(anyVal)) return Number(anyVal);
+  if (typeof anyVal === "object") {
+    const cand =
+      anyVal.code ??
+      anyVal.id ??
+      anyVal.provinceCode ??
+      anyVal.province_id ??
+      anyVal.rubberSourceProvince ??
+      anyVal.value;
+    if (cand != null) return pickProvinceCode(cand);
+  }
+  return null;
+}
+
 /* =============== Types & utils =============== */
 type BookingRow = {
   id: string;
@@ -98,12 +197,18 @@ type BookingRow = {
   truckType?: string;
   rubberTypeName?: string;
   checkInTime?: string | null;
+
+  // weights
   weightIn?: number | null;
   weightInHead?: number | null;
   weightInTrailer?: number | null;
   weightOut?: number | null;
   weightOutHead?: number | null;
   weightOutTrailer?: number | null;
+
+  // ✅ Rubber Source
+  rubberSourceProvince?: number | null;
+  rubberSourceText?: string | null;
 };
 type RangeTab = 0 | 1 | 2;
 
@@ -115,8 +220,30 @@ const fmtNum = (n?: number | null) => (n == null ? "-" : n.toLocaleString());
 const supplierText = (r: BookingRow) =>
   [r.supCode || "-", r.supplierName || ""].filter(Boolean).join(" : ");
 
+/** map event → BookingRow (รองรับ Rubber Source หลายคีย์) */
 function normalizeFromEvent(raw: any): BookingRow {
   const xp = raw?.extendedProps ?? {};
+
+  // ลองหยิบ code จากหลายชื่อคีย์
+  const provinceCodeFromAny =
+    pickProvinceCode(
+      xp.rubber_source_province ??
+        xp.rubberSourceProvince ??
+        xp.sourceProvince ??
+        xp.source_province ??
+        xp.province ??
+        xp.provinceCode ??
+        xp.rubber_source // บางระบบอาจยัด code/string ไว้ตรงนี้
+    ) ?? null;
+
+  // ถ้ามี code → ชื่อจาก TH_PROVINCES, ไม่มีก็ลองเอาชื่อ string ตรง ๆ
+  const rubberSourceTextGuess =
+    provinceName(provinceCodeFromAny) ||
+    xp.rubber_source_name ||
+    xp.sourceProvinceName ||
+    xp.rubber_source ||
+    null;
+
   return {
     id: String(raw?.id ?? raw?._id ?? xp.booking_code ?? ""),
     date: String(raw?.start ?? "").slice(0, 10),
@@ -146,8 +273,13 @@ function normalizeFromEvent(raw: any): BookingRow {
     weightOut: xp.weight_out ?? null,
     weightOutHead: xp.weight_out_head ?? null,
     weightOutTrailer: xp.weight_out_trailer ?? null,
+
+    // ✅ Rubber Source
+    rubberSourceProvince: provinceCodeFromAny,
+    rubberSourceText: rubberSourceTextGuess,
   };
 }
+
 const isTrailer = (tt?: string) =>
   (tt || "").toLowerCase().includes("พ่วง") ||
   (tt || "").toLowerCase().includes("trailer");
@@ -194,7 +326,7 @@ export default function DashboardSummaryPage() {
     setTab(v);
     const base =
       v === 0
-        ? dayjs().startOf("day") // วันปัจจุบัน
+        ? dayjs().startOf("day")
         : (from ?? todayRef.current).startOf("day");
     const nf = alignFromForTab(base, v);
     setFrom(nf);
@@ -293,8 +425,7 @@ export default function DashboardSummaryPage() {
   React.useEffect(() => {
     const t = setTimeout(loadRange, 10);
     return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab]);
+  }, [tab]); // ok
 
   /* ----------------- Aggregation (stacked) ----------------- */
   const hourLabels = React.useMemo(() => {
@@ -424,7 +555,7 @@ export default function DashboardSummaryPage() {
       },
       tooltip: {
         shared: true,
-        intersect: false, // เปิด shared ต้องปิด intersect
+        intersect: false,
         theme: theme.palette.mode,
         y: { formatter: (v) => (v ? `${v.toLocaleString()} Kg.` : "0 Kg.") },
       },
@@ -609,7 +740,7 @@ export default function DashboardSummaryPage() {
                 </Box>
               </Paper>
 
-              {/* Rubber Types panel (ย้ายขึ้นมาอยู่ขวา กินพื้นที่กว้าง) */}
+              {/* Rubber Types panel */}
               <Paper
                 className="col-span-12 lg:col-span-8"
                 variant="outlined"
@@ -709,7 +840,7 @@ export default function DashboardSummaryPage() {
               </Paper>
             </div>
 
-            {/* ===== Bar chart (เต็มความกว้าง) ===== */}
+            {/* ===== Bar chart ===== */}
             <Paper variant="outlined" sx={{ borderRadius: 1, p: 1, mb: 3 }}>
               <Typography variant="subtitle2" sx={{ mb: 1, px: 1.5, pt: 1 }}>
                 {tab === 0
@@ -727,7 +858,7 @@ export default function DashboardSummaryPage() {
                   options={chartOptions}
                   series={seriesForChart}
                   type="bar"
-                  height={400} // สูงขึ้น และกว้างเต็มแถว (เพราะอยู่ในแถวเดี่ยว)
+                  height={400}
                 />
               )}
             </Paper>
@@ -757,6 +888,8 @@ export default function DashboardSummaryPage() {
                       <TableCell>License Plate</TableCell>
                       <TableCell>Truck Type</TableCell>
                       <TableCell>Rubber</TableCell>
+                      {/* ✅ คอลัมน์ใหม่ */}
+                      <TableCell>Rubber Source</TableCell>
                       <TableCell align="right">Weight In ( Kg. )</TableCell>
                       <TableCell align="right">Weight Out ( Kg. )</TableCell>
                       <TableCell align="right">Net Weight ( Kg. )</TableCell>
@@ -766,14 +899,14 @@ export default function DashboardSummaryPage() {
                     {loading ? (
                       Array.from({ length: 6 }).map((_, i) => (
                         <TableRow key={`sk-${i}`}>
-                          <TableCell colSpan={8}>
+                          <TableCell colSpan={9}>
                             <Skeleton height={24} />
                           </TableCell>
                         </TableRow>
                       ))
                     ) : rows.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={8} align="center">
+                        <TableCell colSpan={9} align="center">
                           <Typography variant="body2" color="text.secondary">
                             ไม่มีข้อมูลในช่วงที่เลือก
                           </Typography>
@@ -795,6 +928,11 @@ export default function DashboardSummaryPage() {
                             ? `${r.weightOutHead != null ? r.weightOutHead.toLocaleString() : "-"} / ${r.weightOutTrailer != null ? r.weightOutTrailer.toLocaleString() : "-"}`
                             : `${fmtNum(r.weightOut)}`;
                           const net = rowAbsNet(r);
+
+                          const rubberSourceDisplay =
+                            provinceName(r.rubberSourceProvince ?? null) ||
+                            r.rubberSourceText ||
+                            "-";
 
                           return (
                             <TableRow key={r.id || r.bookingCode} hover>
@@ -827,6 +965,9 @@ export default function DashboardSummaryPage() {
                                   "-"
                                 )}
                               </TableCell>
+                              {/* ✅ แสดง Rubber Source */}
+                              <TableCell>{rubberSourceDisplay}</TableCell>
+
                               <TableCell align="right">{inText}</TableCell>
                               <TableCell align="right">{outText}</TableCell>
                               <TableCell align="right">{fmtNum(net)}</TableCell>

@@ -20,7 +20,6 @@ import {
   TextField,
   Typography,
 } from "@mui/material";
-// Grid v2 (รองรับ prop `size`)
 import Grid from "@mui/material/Grid";
 
 import dayjs from "dayjs";
@@ -37,10 +36,6 @@ const toNum = (v: any): number | null => {
   return Number.isFinite(n) ? n : null;
 };
 
-const fmtPct = (v: any) => {
-  const n = toNum(v);
-  return n === null ? "--%" : `${n.toFixed(2)}%`;
-};
 const fmtKg = (v: any) => {
   const n = toNum(v);
   return n === null ? "-" : n.toLocaleString();
@@ -98,22 +93,134 @@ function parsePair(text?: string): { a: number | null; b: number | null } {
   return { a: parts[0], b: parts[1] };
 }
 
+/* ===== province map & helpers ===== */
+const TH_PROVINCES: Record<number, string> = {
+  10: "กรุงเทพมหานคร",
+  11: "สมุทรปราการ",
+  12: "นนทบุรี",
+  13: "ปทุมธานี",
+  14: "พระนครศรีอยุธยา",
+  15: "อ่างทอง",
+  16: "ลพบุรี",
+  17: "สิงห์บุรี",
+  18: "ชัยนาท",
+  19: "สระบุรี",
+  20: "ชลบุรี",
+  21: "ระยอง",
+  22: "จันทบุรี",
+  23: "ตราด",
+  24: "ฉะเชิงเทรา",
+  25: "ปราจีนบุรี",
+  26: "นครนายก",
+  27: "สระแก้ว",
+  30: "นครราชสีมา",
+  31: "บุรีรัมย์",
+  32: "สุรินทร์",
+  33: "ศรีสะเกษ",
+  34: "อุบลราชธานี",
+  35: "ยโสธร",
+  36: "ชัยภูมิ",
+  37: "อำนาจเจริญ",
+  38: "บึงกาฬ",
+  39: "นครพนม",
+  40: "ขอนแก่น",
+  41: "อุดรธานี",
+  42: "เลย",
+  43: "หนองคาย",
+  44: "มหาสารคาม",
+  45: "ร้อยเอ็ด",
+  46: "กาฬสินธุ์",
+  47: "สกลนคร",
+  49: "มุกดาหาร",
+  50: "เชียงใหม่",
+  51: "ลำพูน",
+  52: "ลำปาง",
+  53: "อุตรดิตถ์",
+  54: "แพร่",
+  55: "น่าน",
+  56: "พะเยา",
+  57: "เชียงราย",
+  58: "แม่ฮ่องสอน",
+  60: "นครสวรรค์",
+  61: "อุทัยธานี",
+  62: "กำแพงเพชร",
+  63: "ตาก",
+  64: "สุโขทัย",
+  65: "พิษณุโลก",
+  66: "พิจิตร",
+  67: "เพชรบูรณ์",
+  70: "ราชบุรี",
+  71: "กาญจนบุรี",
+  72: "สุพรรณบุรี",
+  73: "นครปฐม",
+  74: "สมุทรสาคร",
+  75: "สมุทรสงคราม",
+  76: "เพชรบุรี",
+  77: "ประจวบคีรีขันธ์",
+  80: "นครศรีธรรมราช",
+  81: "กระบี่",
+  82: "พังงา",
+  83: "ภูเก็ต",
+  84: "สุราษฎร์ธานี",
+  85: "ระนอง",
+  86: "ชุมพร",
+  90: "สงขลา",
+  91: "สตูล",
+  92: "ตรัง",
+  93: "พัทลุง",
+  94: "ปัตตานี",
+  95: "ยะลา",
+  96: "นราธิวาส",
+};
+
+const provinceName = (code?: number | null) =>
+  code == null ? undefined : TH_PROVINCES[code] || `จังหวัดรหัส ${code}`;
+
+/** ดึง "รหัสจังหวัด" จากค่ารูปแบบต่างๆ */
+function pickProvinceCode(anyVal: any): number | null {
+  if (anyVal == null || anyVal === "") return null;
+  if (typeof anyVal === "number" && Number.isFinite(anyVal)) return anyVal;
+  if (typeof anyVal === "string" && /^\d+$/.test(anyVal)) return Number(anyVal);
+  if (typeof anyVal === "object") {
+    const cand =
+      anyVal.code ??
+      anyVal.id ??
+      anyVal.provinceCode ??
+      anyVal.province_id ??
+      anyVal.rubberSourceProvince ??
+      anyVal.value;
+    if (cand != null) return pickProvinceCode(cand);
+  }
+  return null;
+}
+
 /* Small UI helpers */
-const KV = ({ label, value }: { label: string; value: React.ReactNode }) => (
-  <Stack
-    direction="row"
-    spacing={1}
-    alignItems="baseline"
-    sx={{ minWidth: 220 }}
-  >
-    <Typography variant="body2" color="text.secondary">
-      {label} :
-    </Typography>
-    <Typography variant="body2" fontWeight={600}>
-      {value}
-    </Typography>
-  </Stack>
-);
+/** ✅ KV ใหม่: ไม่ห่อ value ด้วย Typography เสมอ เพื่อลดโอกาส <p> ซ้อน <p> */
+const KV = ({ label, value }: { label: string; value: React.ReactNode }) => {
+  const isPrimitive =
+    typeof value === "string" || typeof value === "number" || value == null;
+
+  return (
+    <Stack
+      direction="row"
+      spacing={1}
+      alignItems="baseline"
+      sx={{ minWidth: 220 }}
+    >
+      <Typography variant="body2" color="text.secondary" component="span">
+        {label} :
+      </Typography>
+
+      {isPrimitive ? (
+        <Typography variant="body2" fontWeight={600} component="span">
+          {value as any}
+        </Typography>
+      ) : (
+        <Box sx={{ typography: "body2", fontWeight: 600 }}>{value}</Box>
+      )}
+    </Stack>
+  );
+};
 
 const Section = ({
   title,
@@ -131,31 +238,25 @@ const Section = ({
   </Paper>
 );
 
-/** การ์ดสรุป (รองรับปรับความสูงและโทนสี) */
+/** การ์ดสรุป */
 const StatCard = ({
   title,
   value,
   hint,
   highlight = false,
   highlightVariant = "success",
-  order,
-  height = 156, // ค่า default เพื่อให้ทั้งสามการ์ดสูงเท่ากัน
+  height = 156,
   align = "right",
 }: {
   title: string;
   value: React.ReactNode;
   hint?: React.ReactNode;
   highlight?: boolean;
-  /** success = เขียวอ่อน (เดิม), neutral = เทาอ่อน */
   highlightVariant?: "success" | "neutral";
-  order?: { xs?: number; md?: number };
   height?: number;
   align?: "left" | "right";
 }) => (
-  <Grid
-    size={{ xs: 12, sm: 4, md: 4 }}
-    sx={{ order: { xs: order?.xs, md: order?.md } }}
-  >
+  <Grid size={{ xs: 12, sm: 4, md: 4 }}>
     <Paper
       variant="outlined"
       sx={(t) => {
@@ -199,10 +300,7 @@ const StatCard = ({
       {hint ? (
         <Typography
           variant="caption"
-          sx={{
-            opacity: 0.8,
-            whiteSpace: "pre-line" /* รองรับ \n ให้ขึ้นบรรทัด */,
-          }}
+          sx={{ opacity: 0.8, whiteSpace: "pre-line" }}
         >
           {hint}
         </Typography>
@@ -227,7 +325,6 @@ export default function CuplumpDetailPage() {
       const ss = sessionStorage.getItem("cuplump_selected");
       if (ss) {
         const p = JSON.parse(ss);
-        // gross/net จากหน้า list อาจเป็น "a/b" หรือ "a"
         const g = parsePair(p.grossWeight);
         const n = parsePair(p.netWeight);
 
@@ -264,7 +361,26 @@ export default function CuplumpDetailPage() {
           truckRegister: p.truckRegisters?.[0] || "",
           truckType: p.truckTypes?.[0] || "",
           lotNumber: p.lotNumber ?? "-",
+
+          // rubber source keys from list/session
+          rubberSourceProvince:
+            pickProvinceCode(
+              p.rubberSourceProvince ??
+                p.rubberSourceProvinceCode ??
+                p.rubberSourceProvinceId ??
+                p.sourceProvince ??
+                p.province ??
+                p.provinceCode ??
+                p.rubberSource
+            ) ?? null,
+          // อาจเป็นชื่อจากระบบเดิม
           source: p.source ?? "-",
+
+          // ถ้ามีแยกหัว/หาง (จากหน้าอื่นหรือ API)
+          rubberSourceHeadProvince:
+            pickProvinceCode(p.rubberSourceHeadProvince) ?? null,
+          rubberSourceTrailerProvince:
+            pickProvinceCode(p.rubberSourceTrailerProvince) ?? null,
 
           weightIn,
           weightInHead,
@@ -273,7 +389,6 @@ export default function CuplumpDetailPage() {
           weightOutHead,
           weightOutTrailer,
 
-          // ค่าคุณภาพ (ถ้ามี)
           moisture: toNum(p.moisture),
           cpPercent: toNum(p.cpPercent),
           drcEstimate: toNum(p.drcEstimate),
@@ -298,6 +413,28 @@ export default function CuplumpDetailPage() {
         : undefined,
       truckRegister: q("truckRegister") || undefined,
       truckType: q("truckType") || undefined,
+
+      // single source or JSON
+      rubberSourceProvince: (() => {
+        const raw = q("rubberSourceProvince");
+        if (!raw) return undefined;
+        try {
+          const obj = JSON.parse(raw);
+          return pickProvinceCode(obj) ?? undefined;
+        } catch {
+          return pickProvinceCode(raw) ?? undefined;
+        }
+      })(),
+
+      // head/trailer จาก query (ถ้ามี)
+      rubberSourceHeadProvince: (() => {
+        const raw = q("rubberSourceHeadProvince");
+        return raw ? (pickProvinceCode(raw) ?? undefined) : undefined;
+      })(),
+      rubberSourceTrailerProvince: (() => {
+        const raw = q("rubberSourceTrailerProvince");
+        return raw ? (pickProvinceCode(raw) ?? undefined) : undefined;
+      })(),
     };
 
     // 3) ค่าพื้นฐาน
@@ -309,26 +446,32 @@ export default function CuplumpDetailPage() {
       truckRegister: "N/A",
       truckType: "N/A",
       bookingCode: "N/A",
-      sequence: null,
+      sequence: null as number | null,
       userName: "N/A",
-      startTime: null,
-      endTime: null,
-      checkInTime: null,
-      drainStartTime: null,
-      drainStopTime: null,
+      startTime: null as any,
+      endTime: null as any,
+      checkInTime: null as any,
+      drainStartTime: null as any,
+      drainStopTime: null as any,
       lotNumber: "-",
+
+      // single + head/trailer
+      rubberSourceProvince: null as number | null,
+      rubberSourceHeadProvince: null as number | null,
+      rubberSourceTrailerProvince: null as number | null,
+
       source: "-",
-      moisture: null,
-      cpPercent: null,
-      drcEstimate: null,
-      drcRequested: null,
-      drcActual: null,
-      weightIn: null,
-      weightInHead: null,
-      weightInTrailer: null,
-      weightOut: null,
-      weightOutHead: null,
-      weightOutTrailer: null,
+      moisture: null as number | null,
+      cpPercent: null as number | null,
+      drcEstimate: null as number | null,
+      drcRequested: null as number | null,
+      drcActual: null as number | null,
+      weightIn: null as number | null,
+      weightInHead: null as number | null,
+      weightInTrailer: null as number | null,
+      weightOut: null as number | null,
+      weightOutHead: null as number | null,
+      weightOutTrailer: null as number | null,
     };
 
     const merged = { ...fallback, ...fromSP, ...fromSS };
@@ -337,7 +480,6 @@ export default function CuplumpDetailPage() {
 
   const trailer = React.useMemo(() => isTrailer(data?.truckType), [data]);
 
-  // สร้าง hint หลายบรรทัด (ถ้าเป็นพ่วง)
   const headTrailerHint = React.useCallback((pair: string) => {
     if (!pair.includes("/")) return undefined;
     const [head, trailer] = pair.split("/").map((s) => s.trim());
@@ -386,6 +528,51 @@ export default function CuplumpDetailPage() {
     );
   }
 
+  // ==== Rubber Source display (รองรับ head/trailer) ====
+  const singleProvinceCode = pickProvinceCode(
+    data.rubberSourceProvince ??
+      data.sourceProvince ??
+      data.province ??
+      data.provinceCode ??
+      data.rubberSource
+  );
+
+  const headProvinceCode = pickProvinceCode(data.rubberSourceHeadProvince);
+  const trailerProvinceCode = pickProvinceCode(
+    data.rubberSourceTrailerProvince
+  );
+
+  const rubberSourceIsSplit =
+    trailer && (headProvinceCode || trailerProvinceCode);
+
+  const rubberSourceDisplay = rubberSourceIsSplit
+    ? "-" // จะใช้แบบแยกด้านล่างแทน
+    : (provinceName(singleProvinceCode ?? null) ?? show(data.source));
+
+  const rubberSourceStack = rubberSourceIsSplit ? (
+    <Stack spacing={0.25} alignItems="flex-start">
+      <Typography variant="body2" fontWeight={700} component="span">
+        Head: {provinceName(headProvinceCode ?? null) ?? "-"}
+      </Typography>
+      <Typography variant="body2" fontWeight={700} component="span">
+        Trailer: {provinceName(trailerProvinceCode ?? null) ?? "-"}
+      </Typography>
+    </Stack>
+  ) : (
+    <Typography variant="body2" fontWeight={700} component="span">
+      {rubberSourceDisplay}
+    </Typography>
+  );
+
+  const rubberSourceHint =
+    rubberSourceIsSplit &&
+    data.weightInHead != null &&
+    data.weightInTrailer != null
+      ? `Head In = ${fmtKg(data.weightInHead)}\nTrailer In = ${fmtKg(
+          data.weightInTrailer
+        )}`
+      : undefined;
+
   return (
     <Box className="p-6">
       {/* Header */}
@@ -408,7 +595,7 @@ export default function CuplumpDetailPage() {
         </Typography>
       </Stack>
 
-      {/* ===== Overview: ซ้าย = วันที่แบบ Chip, ขวา = Lot Number ===== */}
+      {/* ===== Overview ===== */}
       <Section
         title={
           <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
@@ -433,11 +620,6 @@ export default function CuplumpDetailPage() {
               variant="outlined"
               sx={{ p: 2, borderRadius: 2, height: "100%" }}
             >
-              <Typography
-                variant="subtitle2"
-                sx={{ opacity: 0.7 }}
-                gutterBottom
-              ></Typography>
               <Stack spacing={0.5}>
                 <KV label="Supplier" value={show(data.supplier)} />
                 <KV label="ทะเบียน" value={show(data.truckRegister)} />
@@ -446,25 +628,27 @@ export default function CuplumpDetailPage() {
             </Paper>
           </Grid>
 
-          {/* ประเภทยาง */}
+          {/* ประเภทยาง + Rubber Source */}
           <Grid size={{ xs: 12, md: 3 }}>
             <Paper
               variant="outlined"
               sx={{ p: 2, borderRadius: 2, height: "100%" }}
             >
-              <Typography
-                variant="subtitle2"
-                sx={{ opacity: 0.7 }}
-                gutterBottom
-              ></Typography>
-              <Stack spacing={0.5}>
+              <Stack spacing={0.75}>
                 <KV label="Rubber Type" value={show(data.rubberType)} />
-                <KV label="Rubber Source" value={show(data.source)} />
+                <KV
+                  label="Rubber Source"
+                  value={
+                    <Stack alignItems="flex-start" spacing={0.25}>
+                      {rubberSourceStack}
+                    </Stack>
+                  }
+                />
               </Stack>
             </Paper>
           </Grid>
 
-          {/* น้ำหนัก — ให้สูงเท่ากัน + NET เป็นเทาอ่อน */}
+          {/* น้ำหนัก */}
           <Grid size={{ xs: 12, md: 5 }}>
             <Grid container spacing={1}>
               <StatCard
@@ -486,7 +670,7 @@ export default function CuplumpDetailPage() {
                 value={fmtKg(kgs.net)}
                 hint="Total In - Total Out"
                 highlight
-                highlightVariant="neutral" // 👈 ใช้เทาอ่อนแทนเขียว
+                highlightVariant="neutral"
                 height={156}
                 align="right"
               />
@@ -505,113 +689,34 @@ export default function CuplumpDetailPage() {
               </Typography>
 
               <Grid container spacing={2} alignItems="center">
-                <Grid size={{ xs: 12, sm: 6, md: 2 }}>
-                  <TextField
-                    label="Moisture"
-                    variant="outlined"
-                    size="small"
-                    fullWidth
-                    type="number"
-                    inputProps={{ step: "0.01" }}
-                    value={data.moisture ?? ""}
-                    onChange={(e) =>
-                      setData((p: any) => ({ ...p, moisture: e.target.value }))
-                    }
-                    InputProps={{
-                      endAdornment: (
-                        <InputAdornment position="end">%</InputAdornment>
-                      ),
-                    }}
-                  />
-                </Grid>
+                {[
+                  { key: "moisture", label: "Moisture" },
+                  { key: "cpAvg", label: "Avg.%CP" },
+                  { key: "drcEstimate", label: "DRC Estimate" },
+                  { key: "drcRequested", label: "DRC Requested" },
+                  { key: "drcActual", label: "DRC Actual" },
+                ].map((f) => (
+                  <Grid key={f.key} size={{ xs: 12, sm: 6, md: 2 }}>
+                    <TextField
+                      label={f.label}
+                      variant="outlined"
+                      size="small"
+                      fullWidth
+                      type="number"
+                      inputProps={{ step: "0.01" }}
+                      value={data[f.key] ?? ""}
+                      onChange={(e) =>
+                        setData((p: any) => ({ ...p, [f.key]: e.target.value }))
+                      }
+                      InputProps={{
+                        endAdornment: (
+                          <InputAdornment position="end">%</InputAdornment>
+                        ),
+                      }}
+                    />
+                  </Grid>
+                ))}
 
-                <Grid size={{ xs: 12, sm: 6, md: 2 }}>
-                  <TextField
-                    label="%CP"
-                    variant="outlined"
-                    size="small"
-                    fullWidth
-                    type="number"
-                    inputProps={{ step: "0.01" }}
-                    value={data.cpPercent ?? ""}
-                    onChange={(e) =>
-                      setData((p: any) => ({ ...p, cpPercent: e.target.value }))
-                    }
-                    InputProps={{
-                      endAdornment: (
-                        <InputAdornment position="end">%</InputAdornment>
-                      ),
-                    }}
-                  />
-                </Grid>
-
-                <Grid size={{ xs: 12, sm: 6, md: 2 }}>
-                  <TextField
-                    label="DRC Estimate"
-                    variant="outlined"
-                    size="small"
-                    fullWidth
-                    type="number"
-                    inputProps={{ step: "0.01" }}
-                    value={data.drcEstimate ?? ""}
-                    onChange={(e) =>
-                      setData((p: any) => ({
-                        ...p,
-                        drcEstimate: e.target.value,
-                      }))
-                    }
-                    InputProps={{
-                      endAdornment: (
-                        <InputAdornment position="end">%</InputAdornment>
-                      ),
-                    }}
-                  />
-                </Grid>
-
-                <Grid size={{ xs: 12, sm: 6, md: 2 }}>
-                  <TextField
-                    label="DRC Requested"
-                    variant="outlined"
-                    size="small"
-                    fullWidth
-                    type="number"
-                    inputProps={{ step: "0.01" }}
-                    value={data.drcRequested ?? ""}
-                    onChange={(e) =>
-                      setData((p: any) => ({
-                        ...p,
-                        drcRequested: e.target.value,
-                      }))
-                    }
-                    InputProps={{
-                      endAdornment: (
-                        <InputAdornment position="end">%</InputAdornment>
-                      ),
-                    }}
-                  />
-                </Grid>
-
-                <Grid size={{ xs: 12, sm: 6, md: 2 }}>
-                  <TextField
-                    label="DRC Actual"
-                    variant="outlined"
-                    size="small"
-                    fullWidth
-                    type="number"
-                    inputProps={{ step: "0.01" }}
-                    value={data.drcActual ?? ""}
-                    onChange={(e) =>
-                      setData((p: any) => ({ ...p, drcActual: e.target.value }))
-                    }
-                    InputProps={{
-                      endAdornment: (
-                        <InputAdornment position="end">%</InputAdornment>
-                      ),
-                    }}
-                  />
-                </Grid>
-
-                {/* ปุ่มบันทึกในบรรทัดเดียวกัน */}
                 <Grid
                   size={{ xs: 12, sm: 6, md: 2 }}
                   display="flex"
@@ -639,7 +744,7 @@ export default function CuplumpDetailPage() {
         </Grid>
       </Section>
 
-      {/* ===== Saved list (ตัวอย่างข้อมูล mock) ===== */}
+      {/* ===== Saved list (mock) ===== */}
       <Section
         title={
           <Typography variant="subtitle1" fontWeight={700}>
@@ -710,7 +815,7 @@ export default function CuplumpDetailPage() {
             "Before Baking 1",
             "Before Baking 2",
             "Before Baking 3",
-          ].map((label, idx) => (
+          ].map((label) => (
             <Grid key={label} size={{ xs: 12, sm: 6, md: 2 }}>
               <TextField
                 label={label}

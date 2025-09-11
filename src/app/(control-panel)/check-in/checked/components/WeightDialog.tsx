@@ -16,6 +16,7 @@ import {
 import * as React from "react";
 
 export type RubberTypeOpt = { id: string; name: string };
+export type ProvinceOpt = { code: number; nameTh: string; nameEn?: string };
 
 // number <-> comma helpers
 function fmtComma(v: number | "" | null | undefined) {
@@ -38,6 +39,7 @@ export default function WeightDialog({
   onSave,
   trailer,
   rubberTypes,
+  provinces,
   initial,
 }: {
   open: boolean;
@@ -49,9 +51,13 @@ export default function WeightDialog({
     rubber_type?: string | null;
     rubber_type_head?: string | null;
     rubber_type_trailer?: string | null;
+    rubber_source_province?: number | null;
+    rubber_source_head_province?: number | null;
+    rubber_source_trailer_province?: number | null;
   }) => void;
   trailer: boolean; // true = พ่วง, false = เดี่ยว
   rubberTypes: RubberTypeOpt[];
+  provinces: ProvinceOpt[];
   initial?: {
     weight_in?: number | null;
     weight_in_head?: number | null;
@@ -59,6 +65,9 @@ export default function WeightDialog({
     rubber_type?: string | null;
     rubber_type_head?: string | null;
     rubber_type_trailer?: string | null;
+    rubber_source_province?: number | null;
+    rubber_source_head_province?: number | null;
+    rubber_source_trailer_province?: number | null;
   };
 }) {
   // พ่วง
@@ -66,10 +75,13 @@ export default function WeightDialog({
   const [wTrailer, setWTrailer] = React.useState<string>("");
   const [rtHead, setRtHead] = React.useState<string>("");
   const [rtTrailer, setRtTrailer] = React.useState<string>("");
+  const [pvHead, setPvHead] = React.useState<number | "">("");
+  const [pvTrailer, setPvTrailer] = React.useState<number | "">("");
 
   // เดี่ยว
   const [wSingle, setWSingle] = React.useState<string>("");
   const [rtSingle, setRtSingle] = React.useState<string>("");
+  const [pvSingle, setPvSingle] = React.useState<number | "">("");
 
   React.useEffect(() => {
     if (!open) return;
@@ -78,9 +90,24 @@ export default function WeightDialog({
     setWTrailer(fmtComma(initial?.weight_in_trailer ?? ""));
     setRtHead(initial?.rubber_type_head || "");
     setRtTrailer(initial?.rubber_type_trailer || "");
+    setPvHead(
+      typeof initial?.rubber_source_head_province === "number"
+        ? initial?.rubber_source_head_province
+        : ""
+    );
+    setPvTrailer(
+      typeof initial?.rubber_source_trailer_province === "number"
+        ? initial?.rubber_source_trailer_province
+        : ""
+    );
     // init เดี่ยว
     setWSingle(fmtComma(initial?.weight_in ?? ""));
     setRtSingle(initial?.rubber_type || "");
+    setPvSingle(
+      typeof initial?.rubber_source_province === "number"
+        ? initial?.rubber_source_province
+        : ""
+    );
   }, [open, initial]);
 
   const save = () => {
@@ -92,12 +119,16 @@ export default function WeightDialog({
         weight_in_trailer: trl === "" ? null : Number(trl),
         rubber_type_head: rtHead || null,
         rubber_type_trailer: rtTrailer || null,
+        rubber_source_head_province: pvHead === "" ? null : Number(pvHead),
+        rubber_source_trailer_province:
+          pvTrailer === "" ? null : Number(pvTrailer),
       });
     } else {
       const single = parseNumberFromComma(wSingle);
       onSave({
         weight_in: single === "" ? null : Number(single),
-        rubber_type: rtSingle || null, // ← เดี่ยวส่ง rubber_type เสมอ
+        rubber_type: rtSingle || null,
+        rubber_source_province: pvSingle === "" ? null : Number(pvSingle),
       });
     }
   };
@@ -137,6 +168,25 @@ export default function WeightDialog({
                     </MenuItem>
                   ))}
                 </TextField>
+                <TextField
+                  label="Rubber Source (จังหวัด)"
+                  size="small"
+                  select
+                  value={pvHead}
+                  onChange={(e) =>
+                    setPvHead(
+                      e.target.value === "" ? "" : Number(e.target.value)
+                    )
+                  }
+                  sx={{ minWidth: 220 }}
+                >
+                  <MenuItem value="">- ไม่ระบุ -</MenuItem>
+                  {provinces.map((p) => (
+                    <MenuItem key={p.code} value={p.code}>
+                      {p.nameTh}
+                    </MenuItem>
+                  ))}
+                </TextField>
               </Stack>
 
               <Divider flexItem />
@@ -169,11 +219,30 @@ export default function WeightDialog({
                     </MenuItem>
                   ))}
                 </TextField>
+                <TextField
+                  label="Rubber Source (จังหวัด)"
+                  size="small"
+                  select
+                  value={pvTrailer}
+                  onChange={(e) =>
+                    setPvTrailer(
+                      e.target.value === "" ? "" : Number(e.target.value)
+                    )
+                  }
+                  sx={{ minWidth: 220 }}
+                >
+                  <MenuItem value="">- ไม่ระบุ -</MenuItem>
+                  {provinces.map((p) => (
+                    <MenuItem key={p.code} value={p.code}>
+                      {p.nameTh}
+                    </MenuItem>
+                  ))}
+                </TextField>
               </Stack>
             </>
           )}
 
-          {/* ✅ เดี่ยว: โชว์ Rubber Type เสมอ */}
+          {/* ✅ เดี่ยว: โชว์ Rubber Type + Rubber Source */}
           {!trailer && (
             <Stack direction={{ xs: "column", md: "row" }} spacing={1.5}>
               <TextField
@@ -199,6 +268,25 @@ export default function WeightDialog({
                 {rubberTypes.map((rt) => (
                   <MenuItem key={rt.id} value={rt.id}>
                     {rt.name}
+                  </MenuItem>
+                ))}
+              </TextField>
+              <TextField
+                label="Rubber Source (จังหวัด)"
+                size="small"
+                select
+                value={pvSingle}
+                onChange={(e) =>
+                  setPvSingle(
+                    e.target.value === "" ? "" : Number(e.target.value)
+                  )
+                }
+                sx={{ minWidth: 220 }}
+              >
+                <MenuItem value="">- ไม่ระบุ -</MenuItem>
+                {provinces.map((p) => (
+                  <MenuItem key={p.code} value={p.code}>
+                    {p.nameTh}
                   </MenuItem>
                 ))}
               </TextField>
