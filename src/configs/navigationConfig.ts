@@ -111,6 +111,24 @@ const navigationConfig: FuseNavItemType[] = [
 		],
 	},
 
+	// ✨ เมนูที่เพิ่มเข้ามาใหม่ตามคำขอ ✨
+	{
+		id: 'raw-material-receiving',
+		title: 'Raw Material Receiving',
+		type: 'group',
+		icon: 'lucide:box',
+		children: [
+			{
+				id: 'cuplump-receive',
+				title: 'Cuplump Receive',
+				type: 'item',
+				icon: 'lucide:boxes',
+				url: '/cuplump-received',
+				end: true,
+			},
+		],
+	},
+
 	// 🧪 YTRC Data Lab (เมนูใหม่)
 	{
 		id: 'ytrc-data-lake',
@@ -135,11 +153,11 @@ const navigationConfig: FuseNavItemType[] = [
 				end: true,
 			},
 			{
-				id: 'lab-fg-qc', // ✅ id ใหม่
-				title: 'Environment / FG', // ✅ ชื่อเมนู
+				id: 'lab-fg-qc',
+				title: 'Environment / FG',
 				type: 'item',
-				icon: 'lucide:clipboard-list', // ✅ icon แนะนำ (เลือกได้จาก lucide)
-				url: '/data-lake/fg-qc', // ✅ path ที่ไปหน้าใหม่
+				icon: 'lucide:clipboard-list',
+				url: '/data-lake/fg-qc',
 				end: true,
 			},
 		],
