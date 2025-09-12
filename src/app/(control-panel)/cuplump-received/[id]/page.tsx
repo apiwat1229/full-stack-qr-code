@@ -2,7 +2,15 @@
 "use client";
 
 import ArrowBackIcon from "@mui/icons-material/ArrowBack";
+import EditIcon from "@mui/icons-material/Edit";
 import SaveIcon from "@mui/icons-material/Save";
+
+import Dialog from "@mui/material/Dialog";
+import DialogActions from "@mui/material/DialogActions";
+import DialogContent from "@mui/material/DialogContent";
+import DialogContentText from "@mui/material/DialogContentText";
+import DialogTitle from "@mui/material/DialogTitle";
+
 import {
   Box,
   Button,
@@ -20,13 +28,119 @@ import {
   TextField,
   Typography,
 } from "@mui/material";
+import Alert from "@mui/material/Alert";
 import Grid from "@mui/material/Grid";
+import Snackbar from "@mui/material/Snackbar";
 
 import dayjs from "dayjs";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import * as React from "react";
 
-/* ===== helpers ===== */
+/* ================= CONFIG & helpers ================= */
+const API_BASE =
+  process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/+$/, "") ||
+  "https://database-system.ytrc.co.th/api";
+
+const QUALITY_API = (id: string) => `${API_BASE}/bookings/${id}/quality`;
+const ENTRIES_API = (id: string) => `${API_BASE}/bookings/${id}/entries`;
+const LOOKUP_API = (code: string) =>
+  `${API_BASE}/bookings/lookup?booking_code=${encodeURIComponent(code)}`;
+
+function getToken(): string {
+  try {
+    const fromLS =
+      localStorage.getItem("access_token") ||
+      localStorage.getItem("backend_access_token");
+    const fromSS =
+      sessionStorage.getItem("access_token") ||
+      sessionStorage.getItem("backend_access_token");
+    if (fromLS) return fromLS;
+    if (fromSS) return fromSS;
+    const ck = document.cookie
+      ?.split(";")
+      ?.map((s) => s.trim())
+      ?.find((s) => /^(access_token|backend_access_token)=/.test(s));
+    if (ck) return decodeURIComponent(ck.split("=")[1]);
+    return "";
+  } catch {
+    return "";
+  }
+}
+
+async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
+  const token = getToken();
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    Accept: "application/json",
+    ...(init?.headers as any),
+  };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const res = await fetch(url, { ...init, headers, cache: "no-store" });
+  const raw = await res.text().catch(() => "");
+  if (!res.ok) {
+    let msg = `HTTP ${res.status}`;
+    try {
+      const j = raw ? JSON.parse(raw) : null;
+      if (j?.message)
+        msg = Array.isArray(j.message)
+          ? j.message.join(", ")
+          : String(j.message);
+      else if (j?.error) msg = String(j.error);
+      else if (raw) msg = raw;
+    } catch {
+      if (raw) msg = raw;
+    }
+    throw new Error(msg);
+  }
+  if (!raw) return {} as T;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return raw as unknown as T;
+  }
+}
+
+// Quality
+async function trySaveQuality(
+  id: string,
+  payload: {
+    moisture?: number;
+    cpAvg?: number;
+    drcEstimate?: number;
+    drcRequested?: number;
+    drcActual?: number;
+  }
+) {
+  const body: any = { ...payload };
+  if ("cpPercent" in body) delete (body as any).cpPercent;
+  return fetchJSON<any>(QUALITY_API(id), {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
+}
+async function fetchQuality(id: string) {
+  return fetchJSON<any>(QUALITY_API(id), { method: "GET" });
+}
+
+// Entries
+async function fetchEntries(id: string) {
+  const r = await fetchJSON<{ items?: any[]; count?: number }>(
+    ENTRIES_API(id),
+    {
+      method: "GET",
+    }
+  );
+  return Array.isArray(r?.items) ? r.items : [];
+}
+async function createEntry(id: string, payload: any) {
+  // API ต้องการ snake_case
+  return fetchJSON<any>(ENTRIES_API(id), {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+/* ===== small helpers ===== */
 const show = (v: any) =>
   v === null || v === undefined || v === "" ? "-" : String(v);
 
@@ -34,6 +148,12 @@ const toNum = (v: any): number | null => {
   if (v === null || v === undefined || v === "") return null;
   const n = Number(String(v).replace(/[, ]/g, ""));
   return Number.isFinite(n) ? n : null;
+};
+
+const clampPct = (v: any): number | null => {
+  const n = toNum(v);
+  if (n == null) return null;
+  return Math.max(0, Math.min(100, n));
 };
 
 const fmtKg = (v: any) => {
@@ -59,14 +179,11 @@ function weightBreakText({
   const t = toNum(trailer);
   const s = toNum(single);
   if (h != null || t != null) {
-    return `${h != null ? h.toLocaleString() : "-"} / ${
-      t != null ? t.toLocaleString() : "-"
-    }`;
+    return `${h != null ? h.toLocaleString() : "-"} / ${t != null ? t.toLocaleString() : "-"}`;
   }
   if (s != null) return s.toLocaleString();
   return "-";
 }
-
 function sumOut({
   head,
   trailer,
@@ -83,8 +200,6 @@ function sumOut({
   if (h != null || s != null) return (h ?? 0) + (s ?? 0);
   return null;
 }
-
-/** parse "123" หรือ "8000/3500" → {a: number|null, b: number|null} */
 function parsePair(text?: string): { a: number | null; b: number | null } {
   const s = (text || "").trim();
   if (!s) return { a: null, b: null };
@@ -172,11 +287,8 @@ const TH_PROVINCES: Record<number, string> = {
   95: "ยะลา",
   96: "นราธิวาส",
 };
-
 const provinceName = (code?: number | null) =>
   code == null ? undefined : TH_PROVINCES[code] || `จังหวัดรหัส ${code}`;
-
-/** ดึง "รหัสจังหวัด" จากค่ารูปแบบต่างๆ */
 function pickProvinceCode(anyVal: any): number | null {
   if (anyVal == null || anyVal === "") return null;
   if (typeof anyVal === "number" && Number.isFinite(anyVal)) return anyVal;
@@ -195,11 +307,9 @@ function pickProvinceCode(anyVal: any): number | null {
 }
 
 /* Small UI helpers */
-/** ✅ KV ใหม่: ไม่ห่อ value ด้วย Typography เสมอ เพื่อลดโอกาส <p> ซ้อน <p> */
 const KV = ({ label, value }: { label: string; value: React.ReactNode }) => {
   const isPrimitive =
     typeof value === "string" || typeof value === "number" || value == null;
-
   return (
     <Stack
       direction="row"
@@ -210,7 +320,6 @@ const KV = ({ label, value }: { label: string; value: React.ReactNode }) => {
       <Typography variant="body2" color="text.secondary" component="span">
         {label} :
       </Typography>
-
       {isPrimitive ? (
         <Typography variant="body2" fontWeight={600} component="span">
           {value as any}
@@ -268,7 +377,6 @@ const StatCard = ({
           t.palette.mode === "dark"
             ? t.palette.success.dark
             : t.palette.success.light;
-
         return {
           p: 2,
           minHeight: height,
@@ -315,8 +423,164 @@ const StatCard = ({
 export default function CuplumpDetailPage() {
   const router = useRouter();
   const sp = useSearchParams();
+  const params = useParams();
 
   const [data, setData] = React.useState<any | null>(null);
+  const [savingQuality, setSavingQuality] = React.useState(false);
+  const [resolvedBookingId, setResolvedBookingId] = React.useState<string>("");
+  const [quality, setQuality] = React.useState<any | null>(null);
+  const [entries, setEntries] = React.useState<any[]>([]);
+  const [loadingQuality, setLoadingQuality] = React.useState(false);
+  const [loadingEntries, setLoadingEntries] = React.useState(false);
+
+  // --- form state for Quality inputs ---
+  const FIELDS = [
+    "moisture",
+    "cpAvg",
+    "drcEstimate",
+    "drcRequested",
+    "drcActual",
+  ] as const;
+  type FieldKey = (typeof FIELDS)[number];
+
+  const [formQuality, setFormQuality] = React.useState<
+    Record<FieldKey, number | null>
+  >({
+    moisture: null,
+    cpAvg: null,
+    drcEstimate: null,
+    drcRequested: null,
+    drcActual: null,
+  });
+
+  // --- form state for Cuplump Entries ---
+  const [entryForm, setEntryForm] = React.useState<{
+    beforePress: string;
+    basket: string;
+    cuplump: string;
+    afterPress: string;
+    cp: number | null;
+    beforeBaking1: string;
+    beforeBaking2: string;
+    beforeBaking3: string;
+    note?: string;
+  }>({
+    beforePress: "",
+    basket: "",
+    cuplump: "",
+    afterPress: "",
+    cp: null,
+    beforeBaking1: "",
+    beforeBaking2: "",
+    beforeBaking3: "",
+    note: "",
+  });
+  const [savingEntry, setSavingEntry] = React.useState(false);
+
+  // มีข้อมูลเดิมจาก backend แล้วหรือยัง → ใช้ค่านี้กำหนดปุ่ม Edit/Save
+  const hasExistingQuality = React.useMemo(() => {
+    const q = quality || {};
+    return [
+      "moisture",
+      "cpAvg",
+      "drcEstimate",
+      "drcRequested",
+      "drcActual",
+    ].some((k) => (q as any)?.[k] != null);
+  }, [quality]);
+  const actionLabel = hasExistingQuality ? "Edit" : "Save";
+  const ActionIcon = hasExistingQuality ? EditIcon : SaveIcon;
+
+  // Snackbar + Confirm dialog
+  type SnackSeverity = "success" | "error" | "info" | "warning";
+  const [snack, setSnack] = React.useState<{
+    open: boolean;
+    msg: string;
+    severity: SnackSeverity;
+  }>({ open: false, msg: "", severity: "success" });
+  const [confirmOpen, setConfirmOpen] = React.useState(false);
+  const showSnack = (msg: string, severity: SnackSeverity = "success") =>
+    setSnack({ open: true, msg, severity });
+
+  // เมื่อกด "ยืนยัน" ใน Dialog (บันทึกคุณภาพ)
+  const handleConfirmSave = async () => {
+    try {
+      setSavingQuality(true);
+
+      const payload: any = {
+        moisture: clampPct(formQuality.moisture) ?? undefined,
+        cpAvg: clampPct(formQuality.cpAvg) ?? undefined,
+        drcEstimate: clampPct(formQuality.drcEstimate) ?? undefined,
+        drcRequested: clampPct(formQuality.drcRequested) ?? undefined,
+        drcActual: clampPct(formQuality.drcActual) ?? undefined,
+      };
+      Object.keys(payload).forEach(
+        (k) => payload[k] === undefined && delete payload[k]
+      );
+
+      if (!Object.keys(payload).length) {
+        showSnack("กรุณากรอกค่าอย่างน้อย 1 ช่อง", "warning");
+        return;
+      }
+      if (!bookingId || !resolvedBookingId) {
+        showSnack("ไม่พบรหัสรายการ (bookingId)", "error");
+        return;
+      }
+
+      const resp = await trySaveQuality(resolvedBookingId, payload);
+
+      const nextForm: Record<FieldKey, number | null> = {
+        moisture: resp?.moisture ?? formQuality.moisture,
+        cpAvg: resp?.cpAvg ?? formQuality.cpAvg,
+        drcEstimate: resp?.drcEstimate ?? formQuality.drcEstimate,
+        drcRequested: resp?.drcRequested ?? formQuality.drcRequested,
+        drcActual: resp?.drcActual ?? formQuality.drcActual,
+      };
+      setFormQuality(nextForm);
+      writeCache(resolvedBookingId, nextForm);
+
+      setQuality((prev: any) => ({
+        ...(prev || {}),
+        ...resp,
+        updatedAt: new Date().toISOString(),
+      }));
+
+      showSnack(
+        hasExistingQuality ? "อัปเดตสำเร็จ" : "บันทึกสำเร็จ",
+        "success"
+      );
+    } catch (e: any) {
+      showSnack(e?.message || "Internal server error", "error");
+    } finally {
+      setSavingQuality(false);
+      setConfirmOpen(false);
+    }
+  };
+
+  /* ===== cache helpers ===== */
+  const cacheKey = (id: string) => `quality_form_${id}`;
+  const readCache = (id: string) => {
+    try {
+      const raw = localStorage.getItem(cacheKey(id));
+      if (!raw) return null;
+      const j = JSON.parse(raw);
+      const obj: Record<FieldKey, number | null> = {
+        moisture: j?.moisture ?? null,
+        cpAvg: j?.cpAvg ?? null,
+        drcEstimate: j?.drcEstimate ?? null,
+        drcRequested: j?.drcRequested ?? null,
+        drcActual: j?.drcActual ?? null,
+      };
+      return obj;
+    } catch {
+      return null;
+    }
+  };
+  const writeCache = (id: string, val: Record<FieldKey, number | null>) => {
+    try {
+      localStorage.setItem(cacheKey(id), JSON.stringify(val));
+    } catch {}
+  };
 
   React.useEffect(() => {
     // 1) จากหน้า List (sessionStorage)
@@ -361,8 +625,7 @@ export default function CuplumpDetailPage() {
           truckRegister: p.truckRegisters?.[0] || "",
           truckType: p.truckTypes?.[0] || "",
           lotNumber: p.lotNumber ?? "-",
-
-          // rubber source keys from list/session
+          bookingCode: p.bookingCode ?? p.booking_code ?? undefined,
           rubberSourceProvince:
             pickProvinceCode(
               p.rubberSourceProvince ??
@@ -373,27 +636,24 @@ export default function CuplumpDetailPage() {
                 p.provinceCode ??
                 p.rubberSource
             ) ?? null,
-          // อาจเป็นชื่อจากระบบเดิม
           source: p.source ?? "-",
-
-          // ถ้ามีแยกหัว/หาง (จากหน้าอื่นหรือ API)
           rubberSourceHeadProvince:
             pickProvinceCode(p.rubberSourceHeadProvince) ?? null,
           rubberSourceTrailerProvince:
             pickProvinceCode(p.rubberSourceTrailerProvince) ?? null,
-
           weightIn,
           weightInHead,
           weightInTrailer,
           weightOut,
           weightOutHead,
           weightOutTrailer,
-
           moisture: toNum(p.moisture),
           cpPercent: toNum(p.cpPercent),
           drcEstimate: toNum(p.drcEstimate),
           drcRequested: toNum(p.drcRequested),
           drcActual: toNum(p.drcActual),
+          id: p.id ?? p.bookingId,
+          bookingId: p.bookingId ?? p.id,
         };
       }
     } catch {}
@@ -413,8 +673,7 @@ export default function CuplumpDetailPage() {
         : undefined,
       truckRegister: q("truckRegister") || undefined,
       truckType: q("truckType") || undefined,
-
-      // single source or JSON
+      bookingCode: q("bookingCode") || undefined,
       rubberSourceProvince: (() => {
         const raw = q("rubberSourceProvince");
         if (!raw) return undefined;
@@ -425,8 +684,6 @@ export default function CuplumpDetailPage() {
           return pickProvinceCode(raw) ?? undefined;
         }
       })(),
-
-      // head/trailer จาก query (ถ้ามี)
       rubberSourceHeadProvince: (() => {
         const raw = q("rubberSourceHeadProvince");
         return raw ? (pickProvinceCode(raw) ?? undefined) : undefined;
@@ -435,6 +692,8 @@ export default function CuplumpDetailPage() {
         const raw = q("rubberSourceTrailerProvince");
         return raw ? (pickProvinceCode(raw) ?? undefined) : undefined;
       })(),
+      id: q("id") || undefined,
+      bookingId: q("id") || undefined,
     };
 
     // 3) ค่าพื้นฐาน
@@ -445,24 +704,21 @@ export default function CuplumpDetailPage() {
       rubberType: "N/A",
       truckRegister: "N/A",
       truckType: "N/A",
-      bookingCode: "N/A",
+      bookingCode: undefined as string | undefined,
       sequence: null as number | null,
-      userName: "N/A",
+      userName: "Apiwat",
       startTime: null as any,
       endTime: null as any,
       checkInTime: null as any,
       drainStartTime: null as any,
       drainStopTime: null as any,
       lotNumber: "-",
-
-      // single + head/trailer
       rubberSourceProvince: null as number | null,
       rubberSourceHeadProvince: null as number | null,
       rubberSourceTrailerProvince: null as number | null,
-
       source: "-",
       moisture: null as number | null,
-      cpPercent: null as number | null,
+      cpAvg: null as number | null,
       drcEstimate: null as number | null,
       drcRequested: null as number | null,
       drcActual: null as number | null,
@@ -472,14 +728,140 @@ export default function CuplumpDetailPage() {
       weightOut: null as number | null,
       weightOutHead: null as number | null,
       weightOutTrailer: null as number | null,
+      id: undefined as string | undefined,
+      bookingId: undefined as string | undefined,
     };
 
     const merged = { ...fallback, ...fromSP, ...fromSS };
+    if (merged.cpAvg == null && (merged as any).cpPercent != null) {
+      merged.cpAvg = (merged as any).cpPercent;
+    }
     setData(merged);
-  }, [sp]);
+  }, [sp, params?.id]);
+
+  // helper: ตรวจว่าเป็น ObjectId ไหม
+  const isObjectId = (v?: string) => !!v && /^[a-f\d]{24}$/i.test(v);
+
+  React.useEffect(() => {
+    let cancelled = false;
+
+    const resolve = async () => {
+      const paramId = (params?.id as string) || "";
+      const codeFromQuery = sp.get("bookingCode") || "";
+      const codeFromState = (data as any)?.bookingCode || "";
+      const bookingCode = codeFromQuery || codeFromState || "";
+
+      if (isObjectId(paramId)) {
+        if (!cancelled) setResolvedBookingId(paramId);
+        return;
+      }
+
+      if (bookingCode) {
+        try {
+          const r = await fetchJSON<{ id?: string }>(LOOKUP_API(bookingCode));
+          if (!cancelled) setResolvedBookingId(r?.id || "");
+        } catch {
+          if (!cancelled) setResolvedBookingId("");
+        }
+        return;
+      }
+
+      if (!cancelled) setResolvedBookingId("");
+    };
+
+    resolve();
+    return () => {
+      cancelled = true;
+    };
+  }, [params?.id, sp, (data as any)?.bookingCode]);
+
+  // โหลด quality ครั้งแรก
+  React.useEffect(() => {
+    if (!resolvedBookingId) {
+      setQuality(null);
+      return;
+    }
+    (async () => {
+      try {
+        setLoadingQuality(true);
+        const cached = readCache(resolvedBookingId);
+        if (cached) setFormQuality(cached);
+
+        const q = await fetchQuality(resolvedBookingId);
+        setQuality(q || null);
+
+        const filled: Record<FieldKey, number | null> = {
+          moisture: q?.moisture ?? cached?.moisture ?? null,
+          cpAvg: q?.cpAvg ?? cached?.cpAvg ?? null,
+          drcEstimate: q?.drcEstimate ?? cached?.drcEstimate ?? null,
+          drcRequested: q?.drcRequested ?? cached?.drcRequested ?? null,
+          drcActual: q?.drcActual ?? cached?.drcActual ?? null,
+        };
+        setFormQuality(filled);
+        writeCache(resolvedBookingId, filled);
+      } catch (err) {
+        // เงียบไว้ แต่ไม่ลบค่าที่มี
+        console.warn("load quality error", err);
+      } finally {
+        setLoadingQuality(false);
+      }
+    })();
+  }, [resolvedBookingId]);
+
+  // ฟังก์ชันรีเฟรช entries พร้อม retry เบา ๆ 1 ครั้ง
+  const refreshEntries = React.useCallback(async () => {
+    if (!resolvedBookingId) return;
+    setLoadingEntries(true);
+    try {
+      const items = await fetchEntries(resolvedBookingId);
+      setEntries(items);
+    } catch (e1) {
+      // ลองอีกครั้งหลังดีเลย์สั้น ๆ (กันเคส token เพิ่งมา)
+      await new Promise((r) => setTimeout(r, 250));
+      try {
+        const items2 = await fetchEntries(resolvedBookingId);
+        setEntries(items2);
+      } catch (e2) {
+        console.warn("fetch entries failed", e1, e2);
+        setEntries([]);
+      }
+    } finally {
+      setLoadingEntries(false);
+    }
+  }, [resolvedBookingId]);
+
+  // โหลด entries เมื่อมี bookingId แล้ว + เมื่อกลับมาโฟกัสหน้า
+  React.useEffect(() => {
+    if (!resolvedBookingId) return;
+    refreshEntries();
+
+    const onFocus = () => refreshEntries();
+    const onVis = () => {
+      if (document.visibilityState === "visible") refreshEntries();
+    };
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVis);
+    };
+  }, [resolvedBookingId, refreshEntries]);
+
+  // เขียน cache ทุกครั้งที่ผู้ใช้แก้ค่า
+  React.useEffect(() => {
+    if (!resolvedBookingId) return;
+    writeCache(resolvedBookingId, formQuality);
+  }, [resolvedBookingId, formQuality]);
+
+  // หลังมี state แล้วค่อย derive bookingId ปลอดภัย
+  const bookingId =
+    (params?.id as string) ||
+    sp.get("id") ||
+    (data as any)?.bookingId ||
+    (data as any)?.id ||
+    "";
 
   const trailer = React.useMemo(() => isTrailer(data?.truckType), [data]);
-
   const headTrailerHint = React.useCallback((pair: string) => {
     if (!pair.includes("/")) return undefined;
     const [head, trailer] = pair.split("/").map((s) => s.trim());
@@ -536,17 +918,14 @@ export default function CuplumpDetailPage() {
       data.provinceCode ??
       data.rubberSource
   );
-
   const headProvinceCode = pickProvinceCode(data.rubberSourceHeadProvince);
   const trailerProvinceCode = pickProvinceCode(
     data.rubberSourceTrailerProvince
   );
-
   const rubberSourceIsSplit =
     trailer && (headProvinceCode || trailerProvinceCode);
-
   const rubberSourceDisplay = rubberSourceIsSplit
-    ? "-" // จะใช้แบบแยกด้านล่างแทน
+    ? "-"
     : (provinceName(singleProvinceCode ?? null) ?? show(data.source));
 
   const rubberSourceStack = rubberSourceIsSplit ? (
@@ -564,14 +943,70 @@ export default function CuplumpDetailPage() {
     </Typography>
   );
 
-  const rubberSourceHint =
-    rubberSourceIsSplit &&
-    data.weightInHead != null &&
-    data.weightInTrailer != null
-      ? `Head In = ${fmtKg(data.weightInHead)}\nTrailer In = ${fmtKg(
-          data.weightInTrailer
-        )}`
-      : undefined;
+  // ========= handler บันทึก entry =========
+  const handleSaveEntry = async () => {
+    if (!resolvedBookingId) {
+      showSnack("ไม่พบรหัสรายการ (bookingId)", "error");
+      return;
+    }
+    const hasAny =
+      entryForm.beforePress ||
+      entryForm.basket ||
+      entryForm.cuplump ||
+      entryForm.afterPress ||
+      entryForm.beforeBaking1 ||
+      entryForm.beforeBaking2 ||
+      entryForm.beforeBaking3 ||
+      (entryForm.cp != null && entryForm.cp !== undefined) ||
+      entryForm.note;
+
+    if (!hasAny) {
+      showSnack("กรุณากรอกข้อมูลอย่างน้อย 1 ช่อง", "warning");
+      return;
+    }
+
+    // payload เป็น snake_case ตามตัวอย่าง curl
+    const payload = {
+      before_press: toNum(entryForm.beforePress),
+      basket: toNum(entryForm.basket),
+      cuplump: toNum(entryForm.cuplump),
+      after_press: toNum(entryForm.afterPress),
+      cp: clampPct(entryForm.cp),
+      before_baking_1: toNum(entryForm.beforeBaking1),
+      before_baking_2: toNum(entryForm.beforeBaking2),
+      before_baking_3: toNum(entryForm.beforeBaking3),
+      note: entryForm.note || undefined,
+      created_by: data?.userName || "System",
+    };
+    Object.keys(payload).forEach(
+      (k) => (payload as any)[k] == null && delete (payload as any)[k]
+    );
+
+    try {
+      setSavingEntry(true);
+      await createEntry(resolvedBookingId, payload);
+      await refreshEntries(); // รีเฟรชจากเซิร์ฟเวอร์ทุกครั้งหลังบันทึก
+
+      // ล้างฟอร์ม
+      setEntryForm({
+        beforePress: "",
+        basket: "",
+        cuplump: "",
+        afterPress: "",
+        cp: null,
+        beforeBaking1: "",
+        beforeBaking2: "",
+        beforeBaking3: "",
+        note: "",
+      });
+
+      showSnack("บันทึกรายการสำเร็จ", "success");
+    } catch (e: any) {
+      showSnack(e?.message || "ไม่สามารถบันทึกรายการได้", "error");
+    } finally {
+      setSavingEntry(false);
+    }
+  };
 
   return (
     <Box className="p-6">
@@ -598,9 +1033,26 @@ export default function CuplumpDetailPage() {
       {/* ===== Overview ===== */}
       <Section
         title={
-          <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+          <Box
+            sx={{
+              display: "flex",
+              alignItems: "center",
+              gap: 1,
+              flexWrap: "wrap",
+            }}
+          >
             <Chip label={data.dateText} variant="outlined" />
             <Box sx={{ flexGrow: 1 }} />
+            <Stack direction="row" spacing={1}>
+              <Chip
+                label={`BookingCode: ${data?.bookingCode || "-"}`}
+                variant="outlined"
+              />
+              <Chip
+                label={`ResolvedId: ${resolvedBookingId || "-"}`}
+                variant="outlined"
+              />
+            </Stack>
             <TextField
               label="Create Lot Number"
               size="small"
@@ -635,7 +1087,18 @@ export default function CuplumpDetailPage() {
               sx={{ p: 2, borderRadius: 2, height: "100%" }}
             >
               <Stack spacing={0.75}>
-                <KV label="Rubber Type" value={show(data.rubberType)} />
+                <KV
+                  label="Rubber Type"
+                  value={
+                    <Typography
+                      variant="body2"
+                      fontWeight={700}
+                      component="span"
+                    >
+                      {show(data.rubberType)}
+                    </Typography>
+                  }
+                />
                 <KV
                   label="Rubber Source"
                   value={
@@ -654,14 +1117,12 @@ export default function CuplumpDetailPage() {
               <StatCard
                 title="WEIGHT IN (KG.)"
                 value={fmtKg(data.weightIn)}
-                hint={kgs.inHint}
                 height={156}
                 align="right"
               />
               <StatCard
                 title="WEIGHT OUT (KG.)"
                 value={fmtKg(kgs.outSum)}
-                hint={kgs.outHint}
                 height={156}
                 align="right"
               />
@@ -703,11 +1164,16 @@ export default function CuplumpDetailPage() {
                       size="small"
                       fullWidth
                       type="number"
-                      inputProps={{ step: "0.01" }}
-                      value={data[f.key] ?? ""}
-                      onChange={(e) =>
-                        setData((p: any) => ({ ...p, [f.key]: e.target.value }))
-                      }
+                      inputProps={{ step: "0.01", min: 0, max: 100 }}
+                      value={formQuality[f.key as FieldKey] ?? ""}
+                      onChange={(e) => {
+                        const raw = e.target.value;
+                        const v = raw === "" ? null : clampPct(raw);
+                        setFormQuality((prev) => ({
+                          ...prev,
+                          [f.key as FieldKey]: v,
+                        }));
+                      }}
                       InputProps={{
                         endAdornment: (
                           <InputAdornment position="end">%</InputAdornment>
@@ -724,18 +1190,15 @@ export default function CuplumpDetailPage() {
                 >
                   <Button
                     variant="contained"
-                    startIcon={<SaveIcon />}
-                    onClick={() => {
-                      console.log("Saving Quality Input", {
-                        moisture: data.moisture,
-                        cpPercent: data.cpPercent,
-                        drcEstimate: data.drcEstimate,
-                        drcRequested: data.drcRequested,
-                        drcActual: data.drcActual,
-                      });
-                    }}
+                    startIcon={<ActionIcon />}
+                    disabled={savingQuality}
+                    onClick={() => setConfirmOpen(true)}
                   >
-                    Save
+                    {savingQuality
+                      ? hasExistingQuality
+                        ? "Updating..."
+                        : "Saving..."
+                      : actionLabel}
                   </Button>
                 </Grid>
               </Grid>
@@ -744,7 +1207,7 @@ export default function CuplumpDetailPage() {
         </Grid>
       </Section>
 
-      {/* ===== Saved list (mock) ===== */}
+      {/* ===== Saved list (entries) ===== */}
       <Section
         title={
           <Typography variant="subtitle1" fontWeight={700}>
@@ -767,31 +1230,33 @@ export default function CuplumpDetailPage() {
             </TableRow>
           </TableHead>
           <TableBody>
-            {[
-              {
-                no: 1,
-                beforePress: 12.54,
-                basket: 1.4,
-                cuplump: 11.14,
-                afterPress: 10.18,
-                cp: 31.07,
-                b1: 0.2,
-                b2: 0.195,
-                b3: 0.155,
-              },
-            ].map((r) => (
-              <TableRow key={r.no}>
-                <TableCell>{r.no}</TableCell>
-                <TableCell>{r.beforePress}</TableCell>
-                <TableCell>{r.basket}</TableCell>
-                <TableCell>{r.cuplump}</TableCell>
-                <TableCell>{r.afterPress}</TableCell>
-                <TableCell>{r.cp}</TableCell>
-                <TableCell>{r.b1}</TableCell>
-                <TableCell>{r.b2}</TableCell>
-                <TableCell>{r.b3}</TableCell>
+            {loadingEntries ? (
+              <TableRow>
+                <TableCell colSpan={9} align="center">
+                  กำลังโหลด…
+                </TableCell>
               </TableRow>
-            ))}
+            ) : entries.length === 0 ? (
+              <TableRow>
+                <TableCell colSpan={9} align="center" sx={{ opacity: 0.7 }}>
+                  ยังไม่มีประวัติการบันทึก
+                </TableCell>
+              </TableRow>
+            ) : (
+              entries.map((r: any, idx: number) => (
+                <TableRow key={r.id || idx}>
+                  <TableCell>{r.no ?? idx + 1}</TableCell>
+                  <TableCell>{r.beforePress ?? "-"}</TableCell>
+                  <TableCell>{r.basket ?? "-"}</TableCell>
+                  <TableCell>{r.cuplump ?? "-"}</TableCell>
+                  <TableCell>{r.afterPress ?? "-"}</TableCell>
+                  <TableCell>{r.cp ?? "-"}</TableCell>
+                  <TableCell>{r.beforeBaking1 ?? "-"}</TableCell>
+                  <TableCell>{r.beforeBaking2 ?? "-"}</TableCell>
+                  <TableCell>{r.beforeBaking3 ?? "-"}</TableCell>
+                </TableRow>
+              ))
+            )}
           </TableBody>
         </Table>
       </Section>
@@ -806,41 +1271,183 @@ export default function CuplumpDetailPage() {
         dense
       >
         <Grid container spacing={2}>
-          {[
-            "Before Press",
-            "Basket",
-            "Cuplump",
-            "After Press",
-            "%CP",
-            "Before Baking 1",
-            "Before Baking 2",
-            "Before Baking 3",
-          ].map((label) => (
-            <Grid key={label} size={{ xs: 12, sm: 6, md: 2 }}>
-              <TextField
-                label={label}
-                variant="outlined"
-                size="small"
-                fullWidth
-                type={label.includes("%") ? "number" : "text"}
-                InputProps={
-                  label.includes("%")
-                    ? {
-                        endAdornment: (
-                          <InputAdornment position="end">%</InputAdornment>
-                        ),
-                      }
-                    : undefined
-                }
-              />
-            </Grid>
-          ))}
+          <Grid size={{ xs: 12, sm: 6, md: 2 }}>
+            <TextField
+              label="Before Press"
+              variant="outlined"
+              size="small"
+              fullWidth
+              value={entryForm.beforePress}
+              onChange={(e) =>
+                setEntryForm((p) => ({ ...p, beforePress: e.target.value }))
+              }
+            />
+          </Grid>
+          <Grid size={{ xs: 12, sm: 6, md: 2 }}>
+            <TextField
+              label="Basket"
+              variant="outlined"
+              size="small"
+              fullWidth
+              value={entryForm.basket}
+              onChange={(e) =>
+                setEntryForm((p) => ({ ...p, basket: e.target.value }))
+              }
+            />
+          </Grid>
+          <Grid size={{ xs: 12, sm: 6, md: 2 }}>
+            <TextField
+              label="Cuplump"
+              variant="outlined"
+              size="small"
+              fullWidth
+              value={entryForm.cuplump}
+              onChange={(e) =>
+                setEntryForm((p) => ({ ...p, cuplump: e.target.value }))
+              }
+            />
+          </Grid>
+          <Grid size={{ xs: 12, sm: 6, md: 2 }}>
+            <TextField
+              label="After Press"
+              variant="outlined"
+              size="small"
+              fullWidth
+              value={entryForm.afterPress}
+              onChange={(e) =>
+                setEntryForm((p) => ({ ...p, afterPress: e.target.value }))
+              }
+            />
+          </Grid>
+          <Grid size={{ xs: 12, sm: 6, md: 2 }}>
+            <TextField
+              label="%CP"
+              variant="outlined"
+              size="small"
+              fullWidth
+              type="number"
+              inputProps={{ step: "0.01", min: 0, max: 100 }}
+              value={entryForm.cp ?? ""}
+              onChange={(e) =>
+                setEntryForm((p) => ({
+                  ...p,
+                  cp: e.target.value === "" ? null : clampPct(e.target.value),
+                }))
+              }
+              InputProps={{
+                endAdornment: <InputAdornment position="end">%</InputAdornment>,
+              }}
+            />
+          </Grid>
+          <Grid size={{ xs: 12, sm: 6, md: 2 }}>
+            <TextField
+              label="Before Baking 1"
+              variant="outlined"
+              size="small"
+              fullWidth
+              value={entryForm.beforeBaking1}
+              onChange={(e) =>
+                setEntryForm((p) => ({ ...p, beforeBaking1: e.target.value }))
+              }
+            />
+          </Grid>
+          <Grid size={{ xs: 12, sm: 6, md: 2 }}>
+            <TextField
+              label="Before Baking 2"
+              variant="outlined"
+              size="small"
+              fullWidth
+              value={entryForm.beforeBaking2}
+              onChange={(e) =>
+                setEntryForm((p) => ({ ...p, beforeBaking2: e.target.value }))
+              }
+            />
+          </Grid>
+          <Grid size={{ xs: 12, sm: 6, md: 2 }}>
+            <TextField
+              label="Before Baking 3"
+              variant="outlined"
+              size="small"
+              fullWidth
+              value={entryForm.beforeBaking3}
+              onChange={(e) =>
+                setEntryForm((p) => ({ ...p, beforeBaking3: e.target.value }))
+              }
+            />
+          </Grid>
+          <Grid size={{ xs: 12 }}>
+            <TextField
+              label="หมายเหตุ"
+              variant="outlined"
+              size="small"
+              fullWidth
+              value={entryForm.note}
+              onChange={(e) =>
+                setEntryForm((p) => ({ ...p, note: e.target.value }))
+              }
+            />
+          </Grid>
         </Grid>
 
-        <Button variant="contained" startIcon={<SaveIcon />} sx={{ mt: 2 }}>
-          บันทึก
+        <Button
+          variant="contained"
+          startIcon={<SaveIcon />}
+          sx={{ mt: 2 }}
+          disabled={!resolvedBookingId || savingEntry}
+          onClick={handleSaveEntry}
+        >
+          {savingEntry ? "กำลังบันทึก..." : "บันทึก"}
         </Button>
       </Section>
+
+      {/* Snackbar */}
+      <Snackbar
+        open={snack.open}
+        autoHideDuration={2500}
+        onClose={() => setSnack((s) => ({ ...s, open: false }))}
+        anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
+      >
+        <Alert
+          onClose={() => setSnack((s) => ({ ...s, open: false }))}
+          severity={snack.severity}
+          variant="filled"
+          sx={{ width: "100%" }}
+        >
+          {snack.msg}
+        </Alert>
+      </Snackbar>
+
+      {/* Confirm Dialog (สำหรับบันทึกคุณภาพ) */}
+      <Dialog
+        open={confirmOpen}
+        onClose={() => setConfirmOpen(false)}
+        aria-labelledby="confirm-save-title"
+        fullWidth
+        maxWidth="xs"
+      >
+        <DialogTitle id="confirm-save-title">
+          {hasExistingQuality ? "ยืนยันการแก้ไข" : "ยืนยันการบันทึก"}
+        </DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            {hasExistingQuality
+              ? "คุณต้องการอัปเดตข้อมูลคุณภาพใช่หรือไม่?"
+              : "คุณต้องการบันทึกข้อมูลคุณภาพใช่หรือไม่?"}
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setConfirmOpen(false)} color="inherit">
+            ยกเลิก
+          </Button>
+          <Button
+            onClick={handleConfirmSave}
+            variant="contained"
+            disabled={savingQuality}
+          >
+            {savingQuality ? "กำลังยืนยัน..." : "ยืนยัน"}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 }
