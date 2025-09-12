@@ -154,6 +154,7 @@ type Row = {
   supplierLabel: string;
   date: string;
   rubberType: string;
+  bookingCode?: string;
 
   // ✅ Rubber Source (รวม) + แยกหัว/หาง (ถ้ามี)
   rubberSourceProvince?: number | null;
@@ -225,6 +226,13 @@ function asDayjs(v: unknown, fallback?: Dayjs | null) {
 /* ========== NORMALIZE EVENT ========== */
 function normalizeEvent(raw: EventRaw) {
   const xp = raw?.extendedProps ?? {};
+  const bookingCode =
+    firstDefined(
+      xp?.booking_code,
+      xp?.bookingCode,
+      raw?.booking_code,
+      raw?.bookingCode
+    ) || undefined;
   const supplierCode =
     firstDefined(
       xp?.supplier_code,
@@ -356,6 +364,8 @@ function normalizeEvent(raw: EventRaw) {
     outHead,
     outTrailer,
 
+    bookingCode,
+
     rubberSourceProvince,
     rubberSourceText,
     rubberSourceHeadProvince,
@@ -432,6 +442,8 @@ function aggregateRows(items: ReturnType<typeof normalizeEvent>[]): Row[] {
       date: dayjs(it.dateISO).format("DD-MMM-YYYY"),
       rubberType: it.rubberTypeName,
 
+      bookingCode: it.bookingCode,
+
       rubberSourceProvince: it.rubberSourceProvince ?? null,
       rubberSourceText: it.rubberSourceText ?? null,
       rubberSourceHeadProvince: it.rubberSourceHeadProvince ?? null,
@@ -467,6 +479,7 @@ const MOCK_EVENTS: EventRaw[] = [
       weight_out_trailer: 1023,
       rubber_source_head_province: 18, // ชัยนาท
       rubber_source_trailer_province: 20, // ชลบุรี
+      booking_code: "BK-TRAILER-001",
     },
   },
   {
@@ -480,6 +493,7 @@ const MOCK_EVENTS: EventRaw[] = [
       weight_in: 15000,
       weight_out: 14000,
       rubber_source_province: 21, // ระยอง
+      booking_code: "BK-SINGLE-002",
     },
   },
 ];
@@ -633,6 +647,7 @@ export default function CuplumpReceivedPage() {
                               dateText: r.date,
                               supplier: r.supplierLabel,
                               rubberType: r.rubberType,
+
                               // ✅ ส่งแหล่งที่มาทั้งแบบรวม และแยกหัว/หาง
                               rubberSourceProvince: r.rubberSourceProvince,
                               rubberSourceHeadProvince:
@@ -645,6 +660,7 @@ export default function CuplumpReceivedPage() {
                               truckTypes: r.truckTypes,
                               grossWeight: r.grossWeight,
                               netWeight: r.netWeight,
+                              bookingCode: r.bookingCode,
                             };
                             try {
                               sessionStorage.setItem(
@@ -673,6 +689,8 @@ export default function CuplumpReceivedPage() {
                                 "rubberSourceTrailerProvince",
                                 String(r.rubberSourceTrailerProvince)
                               );
+                            if (r.bookingCode)
+                              qs.set("bookingCode", r.bookingCode);
 
                             router.push(`/cuplump-received/${r.id}?${qs}`);
                           }}
