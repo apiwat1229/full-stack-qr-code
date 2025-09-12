@@ -1270,7 +1270,7 @@ export default function CuplumpDetailPage() {
             {/* CL Lot Number (with confirm + toggle Save/Edit) */}
             <Stack direction="row" spacing={1} alignItems="center">
               <TextField
-                label="CL Lot Number"
+                label="Lot Number"
                 size="small"
                 value={data.lotNumber ?? ""}
                 onChange={(e) =>
@@ -1830,14 +1830,14 @@ export default function CuplumpDetailPage() {
       >
         <DialogTitle>
           {hasLotSaved
-            ? "ยืนยันการแก้ไข CL Lot Number"
-            : "ยืนยันการบันทึก CL Lot Number"}
+            ? "ยืนยันการแก้ไข Lot Number"
+            : "ยืนยันการบันทึก Lot Number"}
         </DialogTitle>
         <DialogContent>
           <DialogContentText>
             {hasLotSaved
-              ? `ต้องการอัปเดต CL Lot Number เป็น "${data?.lotNumber ?? ""}" ใช่หรือไม่?`
-              : `ต้องการบันทึก CL Lot Number เป็น "${data?.lotNumber ?? ""}" ใช่หรือไม่?`}
+              ? `ต้องการอัปเดต Lot Number เป็น "${data?.lotNumber ?? ""}" ใช่หรือไม่?`
+              : `ต้องการบันทึก Lot Number เป็น "${data?.lotNumber ?? ""}" ใช่หรือไม่?`}
           </DialogContentText>
         </DialogContent>
         <DialogActions>
