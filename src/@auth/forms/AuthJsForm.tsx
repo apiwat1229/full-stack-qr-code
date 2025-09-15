@@ -14,7 +14,7 @@ import {
   TextField,
 } from "@mui/material";
 import _ from "lodash";
-import { signIn } from "next-auth/react";
+import { getSession, signIn } from "next-auth/react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Controller, useForm } from "react-hook-form";
 import { z } from "zod";
@@ -24,7 +24,7 @@ import signinErrors from "./signinErrors";
 /* ===== Props ===== */
 type AuthJsFormProps = {
   formType?: "signin";
-  /** fallback ถ้าไม่มี callbackUrl และไม่มี route จาก system */
+  /** fallback ปลายทางหลังล็อกอิน ถ้าไม่มี callbackUrl และไม่มี route จาก system */
   defaultCallbackUrl?: string;
 };
 
@@ -32,16 +32,13 @@ type AuthJsFormProps = {
 const SystemEnum = z.enum(["qr", "dla", "pm"]);
 
 const schema = z.object({
-  email: z
-    .string()
-    .email("You must enter a valid email")
-    .nonempty("You must enter an email"),
+  email: z.string().email("You must enter a valid email").nonempty("You must enter an email"),
   password: z
     .string()
     .min(8, "Password is too short - must be at least 8 chars.")
     .nonempty("Please enter your password."),
   remember: z.boolean().optional(),
-  system: SystemEnum, // ต้องเลือกเสมอ
+  system: SystemEnum, // บังคับเลือก
 });
 
 type FormType = z.infer<typeof schema>;
@@ -53,26 +50,28 @@ const defaultValues: FormType = {
   system: "qr",
 };
 
-/* 🔧 กำหนดปลายทางตามระบบที่เลือก (แก้ได้ตามใจ) */
+/** กำหนดปลายทางตามระบบที่เลือก */
 const ROUTE_BY_SYSTEM: Record<FormType["system"], string> = {
   qr: "/dashboard/qr-code/v1",
   dla: "/dashboard/dla/v1",
   pm: "/dashboard/pm/v1",
 };
 
-/* ===== Component ===== */
-function AuthJsForm({
-  formType = "signin",
-  defaultCallbackUrl = "/",
-}: AuthJsFormProps) {
+/** แปลง error key -> ข้อความอ่านง่าย (ขยายได้ตามต้องการ) */
+const FRIENDLY_AUTH_ERRORS: Record<string, string> = {
+  MissingCSRF:
+    "ไม่พบ CSRF token. โปรดเปิดเว็บด้วยโดเมน/พอร์ตเดียวกับ NEXTAUTH_URL/AUTH_URL ที่ตั้งไว้ใน .env.local (ห้ามสลับ localhost กับ IP)",
+  CredentialsSignin: "อีเมลหรือรหัสผ่านไม่ถูกต้อง",
+  default: "Sign in failed",
+};
+
+function AuthJsForm({ formType = "signin", defaultCallbackUrl = "/" }: AuthJsFormProps) {
   const searchParams = useSearchParams();
   const router = useRouter();
 
   const urlErrorType = searchParams.get("error");
-  const callbackUrlFromUrl = searchParams.get("callbackUrl"); // 🔧 ถ้ามี query จะชนะทุกอย่าง
-
-  const urlErrorMsg =
-    urlErrorType && (signinErrors[urlErrorType] ?? signinErrors.default);
+  const callbackUrlFromUrl = searchParams.get("callbackUrl"); // ชนะทุกอย่างถ้ามี
+  const urlErrorMsg = urlErrorType && (signinErrors[urlErrorType] ?? signinErrors.default);
 
   const { control, formState, handleSubmit, setError } = useForm<FormType>({
     mode: "onChange",
@@ -82,42 +81,106 @@ function AuthJsForm({
 
   const { isValid, dirtyFields, errors } = formState;
 
-  /* 🔧 ฟังก์ชันเลือกปลายทางตามลำดับความสำคัญ */
+  /** หาปลายทางที่ควรไปหลังล็อกอิน */
   function resolveRedirectTarget(system: FormType["system"]) {
-    // 1) callbackUrl จาก query มาก่อน
     if (callbackUrlFromUrl) return callbackUrlFromUrl;
-
-    // 2) route map ตาม system
     const fromSystem = ROUTE_BY_SYSTEM[system];
     if (fromSystem) return fromSystem;
-
-    // 3) fallback prop
     return defaultCallbackUrl || "/";
+  }
+
+  /** ดึง CSRF token ให้แน่ใจว่ามี และผูกกับ origin เดียวกับหน้าเว็บ */
+  async function fetchCsrfToken(): Promise<string> {
+    try {
+      const r = await fetch("/api/auth/csrf", { credentials: "include" });
+      if (!r.ok) return "";
+      const data = (await r.json()) as any;
+      // รองรับหลายรูปแบบที่ NextAuth อาจคืนมา
+      return data?.csrfToken || data?.token || "";
+    } catch {
+      return "";
+    }
+  }
+
+  /** ป้องกัน origin/host mismatch (ช่วยเตือน dev) */
+  function assertOriginMatchesEnv() {
+    // แบบ best-effort: ช่วยเตือนถ้า dev สลับ localhost กับ IP
+    try {
+      const envUrl =
+        process.env.NEXT_PUBLIC_SITE_URL ||
+        process.env.NEXTAUTH_URL ||
+        process.env.AUTH_URL ||
+        "";
+      if (!envUrl) return;
+
+      const current = new URL(window.location.origin);
+      const expected = new URL(envUrl);
+
+      if (current.host !== expected.host || current.protocol !== expected.protocol) {
+        // เตือนใน console ให้ dev เห็น
+        // eslint-disable-next-line no-console
+        console.warn(
+          "[Auth] Host/Protocol mismatch:",
+          { current: current.origin, expected: expected.origin },
+          "=> คุกกี้ CSRF อาจไม่ติดตาม ทำให้ MissingCSRF ได้"
+        );
+      }
+    } catch {
+      // ignore
+    }
   }
 
   async function onSubmit(values: FormType) {
     const { email, password, system } = values;
 
+    assertOriginMatchesEnv();
+
     try {
       localStorage.setItem("selected_system", system);
-    } catch {}
+    } catch {
+      // ignore
+    }
 
-    // แนะนำให้ใช้ redirect:false แล้วค่อย router.push เอง จะ control ง่ายสุด
-    const result = await signIn("credentials", {
-      email,
-      password,
-      redirect: false,
-    });
-
-    if (result?.error) {
-      setError("root", {
-        type: "manual",
-        message: signinErrors[result.error] ?? "Sign in failed",
-      });
+    // 1) ดึง CSRF token ก่อน
+    const csrfToken = await fetchCsrfToken();
+    if (!csrfToken) {
+      setError("root", { type: "manual", message: FRIENDLY_AUTH_ERRORS.MissingCSRF });
       return false;
     }
 
-    // 🔧 ตัดสินใจปลายทางที่นี่
+    // 2) ยิง signIn พร้อม csrfToken และ redirect:false
+    const result = await signIn("credentials", {
+      email,
+      password,
+      csrfToken, // คีย์สำคัญสำหรับบางสภาพแวดล้อม dev
+      redirect: false,
+      // baseUrl จะอิง origin ปัจจุบันอยู่แล้ว ไม่จำเป็นต้องกำหนด
+      // callbackUrl: resolveRedirectTarget(system), // เราจะ push เองข้างล่าง
+    });
+
+    // debug เฉพาะ dev
+    // eslint-disable-next-line no-console
+    console.log("signIn result", result);
+
+    if (result?.error) {
+      const msg =
+        FRIENDLY_AUTH_ERRORS[result.error] ??
+        signinErrors[result.error] ??
+        FRIENDLY_AUTH_ERRORS.default;
+      setError("root", { type: "manual", message: msg });
+      return false;
+    }
+
+    // 3) โหลด session มาเช็ค flag เพิ่มเติม (ถ้าคุณเก็บ mustChangePassword ใน session แล้ว)
+    const sess = await getSession();
+    const mustChange = (sess as any)?.user?.mustChangePassword;
+
+    if (mustChange) {
+      router.push("/change-password");
+      return true;
+    }
+
+    // 4) สำเร็จ → ไปปลายทางที่ต้องการ
     const target = resolveRedirectTarget(system);
     router.push(target);
     return true;
@@ -130,6 +193,7 @@ function AuthJsForm({
       className="flex w-full flex-col justify-center gap-4"
       onSubmit={handleSubmit(onSubmit)}
     >
+      {/* error จาก query เช่น /sign-in?error=CredentialsSignin */}
       {urlErrorMsg && (
         <Alert
           className="mt-2"
@@ -196,9 +260,7 @@ function AuthJsForm({
               required
               value={field.value ?? "qr"}
               error={!!errors.system}
-              helperText={
-                errors.system?.message ? "Please select a system" : undefined
-              }
+              helperText={errors.system?.message ? "Please select a system" : undefined}
               fullWidth
             >
               <MenuItem value="qr">QR Code</MenuItem>
@@ -242,7 +304,7 @@ function AuthJsForm({
         Sign in
       </Button>
 
-      {/* Social providers */}
+      {/* Social providers (ถ้ามี) */}
       <AuthJsProviderSelect />
     </form>
   );

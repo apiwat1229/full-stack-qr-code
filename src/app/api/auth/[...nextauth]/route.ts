@@ -1,10 +1,10 @@
-// src/app/api/auth/[...nextauth]/route.ts
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 import NextAuth from "next-auth";
 import Credentials from "next-auth/providers/credentials";
 
+// ชี้ backend (อย่าใส่ '/' ท้าย)
 const BACKEND = (process.env.NEXT_PUBLIC_BACKEND_URL || "https://database-system.ytrc.co.th").replace(/\/+$/, "");
 
 const authOptions = {
@@ -12,7 +12,7 @@ const authOptions = {
         Credentials({
             name: "Credentials",
             credentials: {
-                email: { label: "Email", type: "text" }, // ✅ เปลี่ยนเป็น email
+                email: { label: "Email", type: "text" },
                 password: { label: "Password", type: "password" },
             },
             async authorize(creds) {
@@ -22,8 +22,7 @@ const authOptions = {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({
-                        // ✅ backend ต้องการ username → แมปจาก email
-                        username: creds.email,
+                        username: creds.email,           // backend ต้องการ username -> map จาก email
                         password: creds.password,
                     }),
                 });
@@ -35,8 +34,10 @@ const authOptions = {
 
                 const data = await r.json();
                 const user = data?.user || {};
-                const accessToken = data?.accessToken;
-                if (!accessToken) throw new Error("Missing accessToken from backend");
+                const accessToken = data?.access_token; // <<<< ใช้ access_token ตาม backend
+                const mustChangePassword = !!data?.mustChangePassword;
+
+                if (!accessToken) throw new Error("Missing access_token from backend");
 
                 return {
                     id: user?._id || user?.id || user?.email || user?.username || crypto.randomUUID(),
@@ -47,6 +48,7 @@ const authOptions = {
                     department: user?.department || undefined,
                     permission: user?.permission || undefined,
                     backendToken: accessToken,
+                    mustChangePassword,              // <<<< เก็บ flag ไว้ต่อ
                 } as any;
             },
         }),
@@ -60,6 +62,7 @@ const authOptions = {
                 if ((user as any).role) token.role = (user as any).role;
                 if ((user as any).username) token.username = (user as any).username;
                 if ((user as any).department) token.department = (user as any).department;
+                if ((user as any).mustChangePassword !== undefined) token.mustChangePassword = !!(user as any).mustChangePassword;
             }
             return token;
         },
@@ -69,10 +72,12 @@ const authOptions = {
             (session.user as any).role = token.role || "user";
             (session.user as any).username = token.username || session.user?.name;
             (session.user as any).department = token.department || undefined;
+            (session.user as any).mustChangePassword = !!token.mustChangePassword;
             return session;
         },
     },
-    // pages: { signIn: "/sign-in" },
+    // ถ้าจะกำหนด cookies แบบละเอียดใน dev (ไม่จำเป็นถ้า AUTH_URL/NEXTAUTH_URL ถูกต้อง)
+    // cookies: { ... }
     secret: process.env.NEXTAUTH_SECRET,
 } satisfies Parameters<typeof NextAuth>[0];
 

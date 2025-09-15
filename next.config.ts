@@ -34,10 +34,14 @@ const baseConfig: NextConfig = {
 	async rewrites() {
 		if (!isProd && API_PROXY_TARGET) {
 			return [
-				{
-					source: '/api/:path*',
-					destination: `${API_PROXY_TARGET}/:path*`,
-				},
+				// ✅ กันเส้นทาง NextAuth ภายในไม่ให้โดน proxy
+				{ source: '/api/auth/:path*', destination: '/api/auth/:path*' },
+
+				// (ถ้าคุณมี route ภายในอื่น ๆ ที่ต้องรันใน Next เอง ก็กันไว้แบบนี้ได้)
+				// { source: '/api/internal/:path*', destination: '/api/internal/:path*' },
+
+				// ✅ ที่เหลือค่อย proxy ไป backend ผ่าน nginx
+				{ source: '/api/:path*', destination: `${API_PROXY_TARGET}/:path*` },
 			];
 		}
 		return [];
